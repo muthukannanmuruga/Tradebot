@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  trading-bot:
+    build: .
+    container_name: ai-trading-bot
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./.env:/app/.env
+    environment:
+      # Load all environment variables from .env file
+      - BINANCE_API_KEY=${BINANCE_API_KEY}
+      - BINANCE_API_SECRET=${BINANCE_API_SECRET}
+      - BINANCE_TESTNET_API_KEY=${BINANCE_TESTNET_API_KEY}
+      - BINANCE_TESTNET_API_SECRET=${BINANCE_TESTNET_API_SECRET}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - DATABASE_URL=${DATABASE_URL}
+      - BINANCE_TESTNET=${BINANCE_TESTNET:-True}
+      # Trading Configuration (multi-pair support)
+      - TRADING_PAIRS=${TRADING_PAIRS:-BTCUSDT}
+      - TRADING_AMOUNT_QUOTE=${TRADING_AMOUNT_QUOTE:-6}
+      - STOP_LOSS_PERCENT=${STOP_LOSS_PERCENT:-0.5}
+      - TAKE_PROFIT_PERCENT=${TAKE_PROFIT_PERCENT:-1.0}
+      - MAX_DAILY_TRADES=${MAX_DAILY_TRADES:-10}
+      # Risk Management
+      - MAX_POSITION_PER_PAIR=${MAX_POSITION_PER_PAIR:-20}
+      - MAX_OPEN_POSITIONS=${MAX_OPEN_POSITIONS:-3}
+      - MAX_PORTFOLIO_EXPOSURE=${MAX_PORTFOLIO_EXPOSURE:-50}
+      # Bot Configuration
+      - CHECK_INTERVAL_SECONDS=${CHECK_INTERVAL_SECONDS:-30}
+      - API_HOST=${API_HOST:-0.0.0.0}
+      - API_PORT=${API_PORT:-8000}
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  data:
+    driver: local
