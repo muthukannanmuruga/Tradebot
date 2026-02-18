@@ -385,7 +385,7 @@ async def get_upstox_portfolio():
 
 @app.get("/upstox/market-data/{instrument_key}")
 async def get_upstox_market_data(instrument_key: str):
-    """Get Upstox market data for an instrument token (use URL-safe format with pipe as |)"""
+    """Get Upstox multi-timeframe market data (5m, 1h, 4h, 1d) for an instrument token."""
     global upstox_bot
 
     if not config.UPSTOX_ENABLED:
@@ -394,7 +394,7 @@ async def get_upstox_market_data(instrument_key: str):
     if not upstox_bot:
         upstox_bot = UpstoxTradingBot()
 
-    return await upstox_bot.get_market_analysis(instrument_key)
+    return await upstox_bot.get_multi_timeframe_analysis(instrument_key)
 
 
 @app.post("/upstox/trade/manual")
@@ -649,8 +649,7 @@ async def upstox_callback(code: str = "", state: str = ""):
         import os, re
 
         project_root = os.path.dirname(os.path.abspath(__file__))
-        env_path = os.path.join(project_root, "..", ".env")
-        env_path = os.path.normpath(env_path)
+        env_path = os.path.join(project_root, ".env")
 
         if os.path.exists(env_path):
             with open(env_path, "r", encoding="utf-8") as f:
@@ -709,7 +708,7 @@ async def upstox_set_token(payload: dict):
     try:
         import os, re
         project_root = os.path.dirname(os.path.abspath(__file__))
-        env_path = os.path.normpath(os.path.join(project_root, "..", ".env"))
+        env_path = os.path.join(project_root, ".env")
 
         if os.path.exists(env_path):
             with open(env_path, "r", encoding="utf-8") as f:
@@ -773,8 +772,7 @@ async def upstox_request_rotation():
             import os, re
 
             project_root = os.path.dirname(os.path.abspath(__file__))
-            env_path = os.path.join(project_root, "..", ".env")
-            env_path = os.path.normpath(env_path)
+            env_path = os.path.join(project_root, ".env")
 
             if os.path.exists(env_path):
                 with open(env_path, "r", encoding="utf-8") as f:
