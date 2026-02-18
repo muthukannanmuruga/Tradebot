@@ -27,7 +27,7 @@ async def verify_all():
         from app.binance_client import BinanceClient
         from app.deepseek_ai import DeepSeekAI
         from app.indicators import TechnicalIndicators
-        from app.trading_bot import TradingBot
+        from app.binance_trading_bot import TradingBot
         from app.models import BotStatus, PortfolioResponse, MarketAnalysis
         from main import app
         print("   [OK] All modules imported successfully\n")

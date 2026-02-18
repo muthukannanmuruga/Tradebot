@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 # Add app to path
 sys.path.insert(0, 'e:\\Tradebot')
 
-from app.trading_bot import TradingBot
+from app.binance_trading_bot import TradingBot
 from app.database import SessionLocal, Trade, Portfolio
 from app.config import config
 

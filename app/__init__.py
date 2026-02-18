@@ -1,6 +1,8 @@
 # AI Trading Bot Package
 """
-AI-powered cryptocurrency trading bot using DeepSeek AI and Binance API.
+AI-powered cryptocurrency and stock trading bot.
+Supports Binance (crypto) and Upstox (Indian stock market),
+powered by DeepSeek AI.
 """
 
-__version__ = "1.0.0"
+__version__ = "2.0.0"

@@ -39,7 +39,7 @@ def get_market_analysis(symbol="BTCUSDT"):
     """Get current market analysis"""
     print_header(f"Market Analysis for {symbol}")
     try:
-        response = requests.get(f"{BASE_URL}/market-data/{symbol}")
+        response = requests.get(f"{BASE_URL}/binance/market-data/{symbol}")
         data = response.json()
         
         indicators = data['indicators']
@@ -77,7 +77,7 @@ def start_bot():
     """Start the trading bot"""
     print_header("Starting Trading Bot")
     try:
-        response = requests.post(f"{BASE_URL}/bot/start")
+        response = requests.post(f"{BASE_URL}/binance/start")
         data = response.json()
         
         if data['status'] == 'success':
@@ -98,7 +98,7 @@ def stop_bot():
     """Stop the trading bot"""
     print_header("Stopping Trading Bot")
     try:
-        response = requests.post(f"{BASE_URL}/bot/stop")
+        response = requests.post(f"{BASE_URL}/binance/stop")
         data = response.json()
         
         if data['status'] == 'success':
@@ -117,7 +117,7 @@ def get_bot_status():
     """Get current bot status"""
     print_header("Bot Status")
     try:
-        response = requests.get(f"{BASE_URL}/bot/status")
+        response = requests.get(f"{BASE_URL}/binance/status")
         data = response.json()
         
         print(f"\n🤖 Running: {'Yes ✅' if data['is_running'] else 'No ❌'}")
@@ -139,7 +139,7 @@ def get_recent_trades(limit=10):
     """Get recent trades"""
     print_header(f"Recent Trades (Last {limit})")
     try:
-        response = requests.get(f"{BASE_URL}/trades?limit={limit}")
+        response = requests.get(f"{BASE_URL}/binance/trades?limit={limit}")
         data = response.json()
         
         trades = data['trades']
@@ -170,7 +170,7 @@ def get_portfolio():
     """Get current portfolio"""
     print_header("Portfolio")
     try:
-        response = requests.get(f"{BASE_URL}/portfolio")
+        response = requests.get(f"{BASE_URL}/binance/portfolio")
         data = response.json()
         
         print(f"\n💵 USDT Balance: ${data['usdt_balance']:,.2f}")
@@ -199,7 +199,7 @@ def manual_trade(symbol="BTCUSDT", side="BUY", quantity=0.001):
     print_header(f"Manual Trade: {side} {quantity} {symbol}")
     try:
         response = requests.post(
-            f"{BASE_URL}/trade/manual",
+            f"{BASE_URL}/binance/trade/manual",
             params={
                 "symbol": symbol,
                 "side": side,

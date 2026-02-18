@@ -161,16 +161,38 @@ class TechnicalIndicators:
         return atr
     
     @staticmethod
-    def calculate_all_indicators(df: pd.DataFrame) -> Dict:
+    def _empty_indicators(label: str = "unknown") -> Dict:
+        """Return a neutral/zero indicator dict when data is unavailable."""
+        return {
+            "current_price": 0.0,
+            "ema_12": 0.0, "ema_26": 0.0,
+            "macd": 0.0, "macd_signal": 0.0, "macd_histogram": 0.0,
+            "rsi": 50.0,
+            "bb_upper": 0.0, "bb_middle": 0.0, "bb_lower": 0.0,
+            "atr": 0.0, "volume": 0.0,
+            "prev_macd": None, "prev_macd_signal": None, "prev_rsi": None,
+            "ema_trend": "neutral", "macd_trend": "neutral",
+            "macd_crossover_bullish": False, "macd_crossover_bearish": False,
+            "rsi_zone": "neutral",
+            "data_available": False,
+            "timeframe": label,
+        }
+
+    @staticmethod
+    def calculate_all_indicators(df: pd.DataFrame, label: str = "") -> Dict:
         """
         Calculate all technical indicators for the given DataFrame
-        
+
         Args:
             df: DataFrame with OHLCV data
-        
+
         Returns:
             Dictionary with all calculated indicators
         """
+        # Need at least 30 rows for meaningful indicators (EMA-26 needs 26+)
+        if df is None or len(df) < 5:
+            print(f"⚠️  Insufficient candle data{' (' + label + ')' if label else ''} – {len(df) if df is not None else 0} rows. Using neutral indicators.")
+            return TechnicalIndicators._empty_indicators(label)
         close = df['close']
         high = df['high']
         low = df['low']
@@ -247,10 +269,20 @@ class TechnicalIndicators:
         Returns:
             Dictionary with indicators for all timeframes
         """
-        indicators_5m = TechnicalIndicators.calculate_all_indicators(df_5m)
-        indicators_1h = TechnicalIndicators.calculate_all_indicators(df_1h)
-        indicators_4h = TechnicalIndicators.calculate_all_indicators(df_4h)
-        indicators_1d = TechnicalIndicators.calculate_all_indicators(df_1d)
+        indicators_5m = TechnicalIndicators.calculate_all_indicators(df_5m, "5m")
+        indicators_1h = TechnicalIndicators.calculate_all_indicators(df_1h, "1h")
+        indicators_4h = TechnicalIndicators.calculate_all_indicators(df_4h, "4h")
+        indicators_1d = TechnicalIndicators.calculate_all_indicators(df_1d, "1d")
+
+        # Use best available price (prefer shorter timeframe if available)
+        best_price = next(
+            (ind["current_price"] for ind in [indicators_5m, indicators_1h, indicators_4h, indicators_1d]
+             if ind.get("data_available", True) and ind["current_price"] > 0),
+            0.0
+        )
+        # Backfill 5m price with best available so summary is always populated
+        if indicators_5m["current_price"] == 0.0 and best_price > 0:
+            indicators_5m["current_price"] = best_price
         
         return {
             "5min": indicators_5m,

@@ -144,17 +144,17 @@ Based on this analysis, should I BUY, SELL, or HOLD?
 ## 🎯 API Endpoints
 
 ### Bot Control
-- `POST /bot/start` - Start automated trading
-- `POST /bot/stop` - Stop the bot
-- `GET /bot/status` - Get current status
+- `POST /binance/start` - Start automated trading
+- `POST /binance/stop` - Stop the bot
+- `GET /binance/status` - Get current status
 
 ### Trading
-- `POST /trade/manual` - Execute manual trade
-- `GET /trades` - View trade history
-- `GET /portfolio` - Current portfolio & P&L
+- `POST /binance/trade/manual` - Execute manual trade
+- `GET /binance/trades` - View trade history
+- `GET /binance/portfolio` - Current portfolio & P&L
 
 ### Market Data
-- `GET /market-data/{symbol}` - Get analysis & indicators
+- `GET /binance/market-data/{symbol}` - Get analysis & indicators
 
 ## 🧪 Testing
 

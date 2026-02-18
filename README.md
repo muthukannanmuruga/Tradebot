@@ -121,24 +121,24 @@ Visit `http://localhost:8000/docs` for interactive API documentation (Swagger UI
 
 ### Bot Control
 
-- **POST** `/bot/start` - Start the trading bot
-- **POST** `/bot/stop` - Stop the trading bot
-- **GET** `/bot/status` - Get current bot status
+- **POST** `/binance/start` - Start the trading bot
+- **POST** `/binance/stop` - Stop the trading bot
+- **GET** `/binance/status` - Get current bot status
 
 ### Trading
 
-- **POST** `/trade/manual` - Execute a manual trade
-- **GET** `/trades` - Get trade history (last 50 trades)
+- **POST** `/binance/trade/manual` - Execute a manual trade
+- **GET** `/binance/trades` - Get trade history (last 50 trades)
 
 ### Market Data
 
-- **GET** `/market-data/{symbol}` - Get current market analysis and indicators
-- **GET** `/portfolio` - Get current portfolio and positions
+- **GET** `/binance/market-data/{symbol}` - Get current market analysis and indicators
+- **GET** `/binance/portfolio` - Get current portfolio and positions
 
 ### Example: Start the Bot
 
 ```bash
-curl -X POST http://localhost:8000/bot/start
+curl -X POST http://localhost:8000/binance/start
 ```
 
 Response:
@@ -154,7 +154,7 @@ Response:
 ### Example: Get Market Analysis
 
 ```bash
-curl http://localhost:8000/market-data/BTCUSDT
+curl http://localhost:8000/binance/market-data/BTCUSDT
 ```
 
 Response includes:

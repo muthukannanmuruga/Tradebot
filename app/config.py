@@ -24,7 +24,34 @@ class Config:
     
     DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY", "")
 
+    # ── Upstox Settings ────────────────────────────────────────────────
+    UPSTOX_API_KEY: str = os.getenv("UPSTOX_API_KEY", "")
+    UPSTOX_API_SECRET: str = os.getenv("UPSTOX_API_SECRET", "")
+    UPSTOX_REDIRECT_URI: str = os.getenv("UPSTOX_REDIRECT_URI", "http://localhost:8000/upstox/callback")
+    UPSTOX_ACCESS_TOKEN: str = os.getenv("UPSTOX_ACCESS_TOKEN", "")  # live token
+    UPSTOX_SANDBOX: bool = os.getenv("UPSTOX_SANDBOX", "False").lower() == "true"
+    UPSTOX_ENABLED: bool = os.getenv("UPSTOX_ENABLED", "False").lower() == "true"
+    # Sandbox-specific credentials (auto-selected when UPSTOX_SANDBOX=True)
+    UPSTOX_SANDBOX_API_KEY: str = os.getenv("UPSTOX_SANDBOX_API_KEY", "")
+    UPSTOX_SANDBOX_API_SECRET: str = os.getenv("UPSTOX_SANDBOX_API_SECRET", "")
+    UPSTOX_SANDBOX_ACCESS_TOKEN: str = os.getenv("UPSTOX_SANDBOX_ACCESS_TOKEN", "")  # sandbox token
+
+    # Upstox Trading Pairs – comma-separated instrument tokens
+    # Example: NSE_EQ|INE848E01016,NSE_EQ|INE002A01018  (PNB, RELIANCE)
+    UPSTOX_TRADING_PAIRS_STR: str = os.getenv("UPSTOX_TRADING_PAIRS", "")
+    UPSTOX_TRADING_PAIRS: list = (
+        [p.strip() for p in UPSTOX_TRADING_PAIRS_STR.split(",") if p.strip()]
+        if UPSTOX_TRADING_PAIRS_STR
+        else []
+    )
+
+    # Upstox trade amount in INR
+    UPSTOX_TRADING_AMOUNT: float = float(os.getenv("UPSTOX_TRADING_AMOUNT", "1000"))
+    # Product type: I = Intraday, D = Delivery, MTF = Margin
+    UPSTOX_PRODUCT_TYPE: str = os.getenv("UPSTOX_PRODUCT_TYPE", "I")
+
     # Binance Settings
+    BINANCE_ENABLED: bool = os.getenv("BINANCE_ENABLED", "True").lower() == "true"
     BINANCE_TESTNET: bool = os.getenv("BINANCE_TESTNET", "True").lower() == "true"
     
     # Trading Pairs - Support multiple pairs separated by comma
@@ -80,12 +107,24 @@ class Config:
         """Validate all required configuration"""
         errors = []
 
-        if not cls.BINANCE_API_KEY:
-            errors.append("BINANCE_API_KEY is not set")
-        if not cls.BINANCE_API_SECRET:
-            errors.append("BINANCE_API_SECRET is not set")
+        if cls.BINANCE_ENABLED:
+            if not cls.BINANCE_API_KEY:
+                errors.append("BINANCE_API_KEY is not set (BINANCE_ENABLED=True)")
+            if not cls.BINANCE_API_SECRET:
+                errors.append("BINANCE_API_SECRET is not set (BINANCE_ENABLED=True)")
         if not cls.DEEPSEEK_API_KEY:
             errors.append("DEEPSEEK_API_KEY is not set")
+
+        # Upstox validation (only when enabled)
+        if cls.UPSTOX_ENABLED:
+            if not cls.UPSTOX_API_KEY:
+                errors.append("UPSTOX_API_KEY is not set (UPSTOX_ENABLED=True)")
+            if not cls.UPSTOX_API_SECRET:
+                errors.append("UPSTOX_API_SECRET is not set (UPSTOX_ENABLED=True)")
+            if not cls.UPSTOX_ACCESS_TOKEN:
+                errors.append("UPSTOX_ACCESS_TOKEN is not set (UPSTOX_ENABLED=True)")
+            if not cls.UPSTOX_TRADING_PAIRS:
+                errors.append("UPSTOX_TRADING_PAIRS is not set (UPSTOX_ENABLED=True)")
 
         return len(errors) == 0, errors
 

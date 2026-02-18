@@ -9,7 +9,7 @@ from unittest.mock import patch, AsyncMock
 
 sys.path.insert(0, 'e:\\Tradebot')
 
-from app.trading_bot import TradingBot
+from app.binance_trading_bot import TradingBot
 
 
 async def test_single_trade():

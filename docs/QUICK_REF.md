@@ -65,13 +65,13 @@ python main.py
 # Open: http://localhost:8000/docs
 
 # Check current status
-curl http://localhost:8000/bot/status
+curl http://localhost:8000/binance/status
 
 # Start trading
-curl -X POST http://localhost:8000/bot/start
+curl -X POST http://localhost:8000/binance/start
 
 # Stop trading
-curl -X POST http://localhost:8000/bot/stop
+curl -X POST http://localhost:8000/binance/stop
 ```
 
 ---
@@ -99,13 +99,13 @@ MAX_DAILY_TRADES=10               # Daily limit
 ## API Endpoints
 
 ### Bot Control
-- `POST /bot/start` - Start trading
-- `POST /bot/stop` - Stop trading
-- `GET /bot/status` - Current status
+- `POST /binance/start` - Start trading
+- `POST /binance/stop` - Stop trading
+- `GET /binance/status` - Current status
 
 ### Data
-- `GET /portfolio` - Your positions
-- `GET /trades` - Trade history
+- `GET /binance/portfolio` - Your positions
+- `GET /binance/trades` - Trade history
 - `GET /` - Health check
 
 ### Documentation

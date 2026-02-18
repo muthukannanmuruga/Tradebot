@@ -104,44 +104,44 @@ You'll see interactive API documentation!
 
 **Using API:**
 ```bash
-curl -X POST http://localhost:8000/bot/start
+curl -X POST http://localhost:8000/binance/start
 ```
 
 **Using Python:**
 ```python
 import requests
-response = requests.post("http://localhost:8000/bot/start")
+response = requests.post("http://localhost:8000/binance/start")
 print(response.json())
 ```
 
 **Using the web UI:**
 1. Go to http://localhost:8000/docs
-2. Click on `/bot/start`
+2. Click on `/binance/start`
 3. Click "Try it out"
 4. Click "Execute"
 
 ### Check Bot Status
 
 ```bash
-curl http://localhost:8000/bot/status
+curl http://localhost:8000/binance/status
 ```
 
 ### View Recent Trades
 
 ```bash
-curl http://localhost:8000/trades
+curl http://localhost:8000/binance/trades
 ```
 
 ### Get Market Analysis
 
 ```bash
-curl http://localhost:8000/market-data/BTCUSDT
+curl http://localhost:8000/binance/market-data/BTCUSDT
 ```
 
 ### Stop the Bot
 
 ```bash
-curl -X POST http://localhost:8000/bot/stop
+curl -X POST http://localhost:8000/binance/stop
 ```
 
 ## 📊 What Happens When Running?
@@ -209,7 +209,7 @@ CHECK_INTERVAL_SECONDS=300    # Check every 5 minutes (not every minute)
 - Check confidence threshold (default is 60%)
 - Market might be sideways (no clear signals)
 - Check console for AI reasoning
-- Verify you started the bot: POST /bot/start
+- Verify you started the bot: POST /binance/start
 
 ## 📈 Next Steps
 

@@ -2,7 +2,7 @@
 Test script for multi-timeframe analysis
 """
 import asyncio
-from app.trading_bot import TradingBot
+from app.binance_trading_bot import TradingBot
 from app.config import config
 
 

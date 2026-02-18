@@ -2,7 +2,7 @@
 Database models using SQLAlchemy for trade history and portfolio tracking.
 """
 
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Boolean
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Boolean, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime, timezone
@@ -51,6 +51,8 @@ class Portfolio(Base):
     quantity = Column(Float)
     entry_price = Column(Float)
     current_price = Column(Float)
+    total_invested = Column(Float, default=0.0)
+    current_value = Column(Float, default=0.0)
     unrealized_pl = Column(Float)
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
@@ -80,6 +82,19 @@ def init_db():
     if not _tables_initialized:
         try:
             Base.metadata.create_all(bind=engine)
+            # Migrate: add new columns if they don't exist yet
+            with engine.connect() as conn:
+                for col, coltype in [
+                    ("total_invested", "FLOAT DEFAULT 0.0"),
+                    ("current_value",  "FLOAT DEFAULT 0.0"),
+                ]:
+                    try:
+                        conn.execute(
+                            text(f"ALTER TABLE portfolio ADD COLUMN IF NOT EXISTS {col} {coltype}")
+                        )
+                        conn.commit()
+                    except Exception:
+                        pass  # column already exists or DDL not supported
             _tables_initialized = True
         except Exception as e:
             print(f"Warning: Could not create tables: {e}")
