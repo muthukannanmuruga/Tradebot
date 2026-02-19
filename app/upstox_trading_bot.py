@@ -324,6 +324,8 @@ class UpstoxTradingBot:
                             entry_price=entry_price,
                             exit_price=exit_price,
                             status="CLOSED",
+                            closed_at=datetime.now(timezone.utc),
+                            is_sandbox=is_sandbox,
                             order_id=str(closing_order.get("order_id", "")),
                             ai_reasoning=f"[Auto Square-off] Market close at {exit_price:.2f}",
                             confidence=0.0,
@@ -721,6 +723,9 @@ class UpstoxTradingBot:
                             * 100
                         ) if portfolio_entry.entry_price else 0.0
                         trade.entry_price = portfolio_entry.entry_price
+                        # mark trade as closed and timestamp it
+                        trade.closed_at = datetime.now(timezone.utc)
+                        trade.status = "CLOSED"
                         db.delete(portfolio_entry)
                         db.commit()
                         print(
@@ -751,6 +756,9 @@ class UpstoxTradingBot:
                             * 100
                         ) if portfolio_entry.entry_price else 0.0
                         trade.entry_price = portfolio_entry.entry_price
+                        # mark trade as closed and timestamp it
+                        trade.closed_at = datetime.now(timezone.utc)
+                        trade.status = "CLOSED"
                         db.delete(portfolio_entry)
                         db.commit()
                         print(
