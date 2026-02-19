@@ -39,6 +39,7 @@ class Trade(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     closed_at = Column(DateTime, nullable=True)
     order_id = Column(String, nullable=True, unique=True)
+    is_sandbox = Column(Boolean, default=False, index=True)  # True for testnet/sandbox, False for live
 
 
 class Portfolio(Base):
@@ -55,14 +56,17 @@ class Portfolio(Base):
     current_value = Column(Float, default=0.0)
     unrealized_pl = Column(Float)
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    is_sandbox = Column(Boolean, default=False, index=True)  # True for testnet/sandbox, False for live
 
 
 class BotMetrics(Base):
-    """Bot performance metrics"""
+    """Bot performance metrics – one row per market (binance / upstox)"""
 
     __tablename__ = "bot_metrics"
 
     id = Column(Integer, primary_key=True, index=True)
+    market = Column(String, default="binance", index=True)  # 'binance' or 'upstox'
+    is_sandbox = Column(Boolean, default=False, index=True)  # True for testnet/sandbox, False for live
     total_trades = Column(Integer, default=0)
     winning_trades = Column(Integer, default=0)
     losing_trades = Column(Integer, default=0)
@@ -72,6 +76,14 @@ class BotMetrics(Base):
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
+class AdminSetting(Base):
+    """Simple key/value store for runtime admin settings."""
+
+    __tablename__ = "admin_settings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    key = Column(String, unique=True, index=True)
+    value = Column(String)
 # Initialize tables (lazy initialization on first use)
 _tables_initialized = False
 
@@ -95,6 +107,32 @@ def init_db():
                         conn.commit()
                     except Exception:
                         pass  # column already exists or DDL not supported
+                # BotMetrics: add 'market' column for per-market metrics
+                try:
+                    conn.execute(
+                        text("ALTER TABLE bot_metrics ADD COLUMN IF NOT EXISTS market VARCHAR DEFAULT 'binance'")
+                    )
+                    conn.commit()
+                except Exception:
+                    pass
+                # Add is_sandbox column to all tables
+                for table in ["trades", "portfolio", "bot_metrics"]:
+                    try:
+                        conn.execute(
+                            text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS is_sandbox BOOLEAN DEFAULT FALSE")
+                        )
+                        conn.commit()
+                    except Exception:
+                        pass
+
+                # Create admin_settings table if missing
+                try:
+                    conn.execute(
+                        text("CREATE TABLE IF NOT EXISTS admin_settings (id SERIAL PRIMARY KEY, key VARCHAR UNIQUE, value VARCHAR);")
+                    )
+                    conn.commit()
+                except Exception:
+                    pass
             _tables_initialized = True
         except Exception as e:
             print(f"Warning: Could not create tables: {e}")

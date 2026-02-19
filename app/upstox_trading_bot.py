@@ -23,33 +23,96 @@ class UpstoxTradingBot:
         self.upstox = UpstoxClient()
         self.ai = DeepSeekAI()
         self.is_running = False
-        # Track position per instrument: {"NSE_EQ|INE...": None or "LONG"}
+        # Track position per instrument: {"NSE_EQ|INE...": None, "LONG", or "SHORT"}
         self.positions: Dict[str, Optional[str]] = {}
         self.last_check = None
         self.trade_count = 0
         self.daily_trades = 0
         self.last_trade_date = None
-        # Upstox trading pairs from config
-        self.trading_pairs = config.UPSTOX_TRADING_PAIRS
+        # Upstox trading pairs - will be set in start() if auto-select enabled
+        self.auto_select_enabled = config.UPSTOX_AUTO_SELECT_PAIRS
+        self.trading_pairs = config.UPSTOX_TRADING_PAIRS  # Default to config
+        
         self.product_type = config.UPSTOX_PRODUCT_TYPE  # I, D, MTF
+        # Margin utilization % for intraday (default 100%)
+        self.margin_percent = config.UPSTOX_MARGIN_PERCENT
+        # Background task for auto square-off sync
+        self._sync_task = None
 
         # Initialize positions and sync from DB
         self._sync_positions_from_db()
+    
+    def _get_ai_selected_pairs(self) -> list:
+        """Legacy sync wrapper - kept for compatibility."""
+        return config.UPSTOX_TRADING_PAIRS
+    
+    async def _get_ai_selected_pairs_async(self) -> list:
+        """Get trading pairs from AI sentiment analysis for Indian stocks (async version)."""
+        try:
+            import httpx
+            
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.get("http://localhost:8000/ai/indian-market-sentiment")
+                result = response.json()
+            
+            suggested_trades = result.get("suggested_trades", [])
+            
+            if not suggested_trades:
+                print("⚠️  AI returned no trade suggestions, using config pairs")
+                return config.UPSTOX_TRADING_PAIRS
+            
+            # Extract ISINs and format as NSE_EQ|ISIN instrument tokens
+            instruments = []
+            for trade in suggested_trades[:10]:  # Limit to top 10
+                symbol = trade.get("symbol", "")
+                isin = trade.get("isin", "")
+                
+                if isin and isin.startswith("INE") and len(isin) == 12:
+                    # Format as Upstox instrument token: NSE_EQ|ISIN
+                    instrument = f"NSE_EQ|{isin}"
+                    instruments.append(instrument)
+                    print(f"  • {symbol} ({isin}) -> {instrument}")
+                elif symbol:
+                    print(f"  ⚠️  {symbol}: No valid ISIN provided by AI")
+            
+            if not instruments:
+                print("⚠️  Could not extract valid ISINs from AI, using config pairs")
+                return config.UPSTOX_TRADING_PAIRS
+            
+            print(f"🎯 AI selected {len(instruments)} NSE stocks")
+            return instruments
+            
+        except Exception as e:
+            print(f"❌ Error fetching AI sentiment: {e}, using config pairs")
+            import traceback
+            traceback.print_exc()
+            return config.UPSTOX_TRADING_PAIRS
 
     def _sync_positions_from_db(self):
         """Sync position state from database on initialization."""
         db = SessionLocal()
         try:
+            is_sandbox = config.UPSTOX_SANDBOX
             for pair in self.trading_pairs:
                 portfolio_entry = (
-                    db.query(Portfolio).filter(Portfolio.pair == pair).first()
+                    db.query(Portfolio).filter(
+                        Portfolio.pair == pair,
+                        Portfolio.is_sandbox == is_sandbox
+                    ).first()
                 )
                 if portfolio_entry:
-                    self.positions[pair] = "LONG"
-                    print(
-                        f"📍 Restored Upstox position: {pair} = LONG "
-                        f"(Qty: {portfolio_entry.quantity} @ ₹{portfolio_entry.entry_price:.2f})"
-                    )
+                    if portfolio_entry.quantity < 0:
+                        self.positions[pair] = "SHORT"
+                        print(
+                            f"📍 Restored Upstox position: {pair} = SHORT "
+                            f"(Qty: {portfolio_entry.quantity} @ ₹{portfolio_entry.entry_price:.2f})"
+                        )
+                    else:
+                        self.positions[pair] = "LONG"
+                        print(
+                            f"📍 Restored Upstox position: {pair} = LONG "
+                            f"(Qty: {portfolio_entry.quantity} @ ₹{portfolio_entry.entry_price:.2f})"
+                        )
                 else:
                     self.positions[pair] = None
             self._get_or_create_metrics(db)
@@ -57,10 +120,16 @@ class UpstoxTradingBot:
             db.close()
 
     def _get_or_create_metrics(self, db):
-        """Get or create BotMetrics record."""
-        metrics = db.query(BotMetrics).first()
+        """Get or create BotMetrics record for Upstox."""
+        is_sandbox = config.UPSTOX_SANDBOX
+        metrics = db.query(BotMetrics).filter(
+            BotMetrics.market == "upstox",
+            BotMetrics.is_sandbox == is_sandbox
+        ).first()
         if not metrics:
             metrics = BotMetrics(
+                market="upstox",
+                is_sandbox=is_sandbox,
                 total_trades=0,
                 winning_trades=0,
                 losing_trades=0,
@@ -70,7 +139,7 @@ class UpstoxTradingBot:
             )
             db.add(metrics)
             db.commit()
-            print("📊 Initialized BotMetrics table")
+            print("📊 Initialized BotMetrics table (upstox)")
         return metrics
 
     # ── Bot lifecycle ──────────────────────────────────────────────────
@@ -89,12 +158,33 @@ class UpstoxTradingBot:
             print("="*60 + "\n")
             self.is_running = False
             return
+        
+        # ── Fetch AI-selected pairs if enabled ───────────────────────────
+        if self.auto_select_enabled:
+            print("🤖 AI Auto-pair selection ENABLED for Upstox")
+            ai_pairs = await self._get_ai_selected_pairs_async()
+            if ai_pairs:
+                self.trading_pairs = ai_pairs
+                # Re-sync positions for new pairs
+                self._sync_positions_from_db()
 
         self.is_running = True
         print("🚀 Upstox Trading bot started!")
         print(f"📊 Trading instruments: {', '.join(self.trading_pairs)}")
         print(f"📦 Product type: {self.product_type}")
         print(f"⏰ Check interval: {config.CHECK_INTERVAL_SECONDS}s")
+        
+        # Start background sync task for auto square-offs (3:30 PM IST daily)
+        if self.product_type == "I":  # Only for intraday
+            # ── Catch-up: if server was down at 3:30 PM, sync immediately ──
+            now_ist = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+            cutoff = now_ist.replace(hour=15, minute=30, second=0, microsecond=0)
+            # weekday() 0=Mon … 4=Fri; run only on trading days
+            if now_ist > cutoff and now_ist.weekday() < 5:
+                print("⚡ Server started after market close — running catch-up square-off sync...")
+                asyncio.create_task(self._sync_auto_squareoffs())
+            self._sync_task = asyncio.create_task(self._schedule_sync_task())
+            print("📅 Auto square-off sync task scheduled for 3:30 PM IST")
 
         while self.is_running:
             try:
@@ -109,7 +199,166 @@ class UpstoxTradingBot:
     async def stop(self):
         """Stop the trading bot."""
         self.is_running = False
+        if self._sync_task:
+            self._sync_task.cancel()
+            try:
+                await self._sync_task
+            except asyncio.CancelledError:
+                pass
         print("🛑 Upstox Trading bot stopped!")
+
+    # ── Auto square-off sync ───────────────────────────────────────────
+
+    async def _schedule_sync_task(self):
+        """Background task that runs daily at 3:30 PM IST to sync auto square-offs."""
+        while self.is_running:
+            try:
+                now_ist = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+                target_time = now_ist.replace(hour=15, minute=30, second=0, microsecond=0)
+
+                # If already past 3:30 PM today (catch-up may have already run),
+                # always push to tomorrow so we never double-fire on the same day.
+                if now_ist >= target_time:
+                    target_time += timedelta(days=1)
+
+                # Skip weekends — advance to Monday if target falls on Sat/Sun
+                while target_time.weekday() >= 5:
+                    target_time += timedelta(days=1)
+
+                wait_seconds = (target_time - now_ist).total_seconds()
+                print(f"⏰ Next auto square-off sync at {target_time.strftime('%Y-%m-%d %H:%M IST')}")
+
+                await asyncio.sleep(wait_seconds)
+
+                # Run the sync
+                if self.is_running:
+                    await self._sync_auto_squareoffs()
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                print(f"❌ Error in sync task scheduler: {e}")
+                await asyncio.sleep(3600)  # Retry in 1 hour
+
+    async def _sync_auto_squareoffs(self):
+        """Check order history and sync any auto-squared positions to DB."""
+        try:
+            print("\n" + "="*60)
+            print("🔄 Syncing auto square-offs from Upstox order history...")
+            print("="*60)
+            
+            db = SessionLocal()
+            try:
+                is_sandbox = config.UPSTOX_SANDBOX
+                # Get all open positions from DB
+                open_positions = db.query(Portfolio).filter(
+                    Portfolio.is_sandbox == is_sandbox
+                ).all()
+                
+                if not open_positions:
+                    print("✅ No open positions in DB – nothing to sync")
+                    return
+                
+                # Get today's order history from Upstox
+                orders = await self.upstox.get_order_book()
+                trades = await self.upstox.get_trades()
+                
+                print(f"📋 Found {len(open_positions)} open positions in DB")
+                print(f"📋 Found {len(orders)} orders and {len(trades)} trades from Upstox")
+                
+                # For each open position, check if it was auto-squared
+                for portfolio_entry in open_positions:
+                    instrument = portfolio_entry.pair
+                    db_qty = portfolio_entry.quantity
+                    is_short = db_qty < 0
+                    abs_qty = abs(db_qty)
+                    
+                    # Find matching closing order in order history
+                    # For LONG: look for SELL order
+                    # For SHORT: look for BUY order
+                    expected_side = "BUY" if is_short else "SELL"
+                    
+                    closing_order = None
+                    exit_price = None
+                    
+                    # Check trades first (most accurate)
+                    for trade in trades:
+                        if (
+                            trade.get("instrument_token") == instrument
+                            and trade.get("transaction_type") == expected_side
+                            and int(trade.get("quantity", 0)) == abs_qty
+                        ):
+                            closing_order = trade
+                            exit_price = float(trade.get("price", 0))
+                            break
+                    
+                    # Fallback to orders
+                    if not closing_order:
+                        for order in orders:
+                            if (
+                                order.get("instrument_token") == instrument
+                                and order.get("transaction_type") == expected_side
+                                and order.get("status") == "complete"
+                                and int(order.get("quantity", 0)) == abs_qty
+                            ):
+                                closing_order = order
+                                exit_price = float(order.get("average_price", 0))
+                                break
+                    
+                    if closing_order and exit_price:
+                        # Found auto square-off – calculate P&L
+                        entry_price = portfolio_entry.entry_price
+                        
+                        if is_short:
+                            # SHORT P&L: (entry - exit) * qty
+                            realized_pl = (entry_price - exit_price) * abs_qty
+                        else:
+                            # LONG P&L: (exit - entry) * qty
+                            realized_pl = (exit_price - entry_price) * abs_qty
+                        
+                        # Create closed trade record
+                        trade_record = Trade(
+                            pair=instrument,
+                            side=expected_side,
+                            quantity=abs_qty,
+                            entry_price=entry_price,
+                            exit_price=exit_price,
+                            status="CLOSED",
+                            order_id=str(closing_order.get("order_id", "")),
+                            ai_reasoning=f"[Auto Square-off] Market close at {exit_price:.2f}",
+                            confidence=0.0,
+                            profit_loss=realized_pl,
+                            profit_loss_percent=((realized_pl / (entry_price * abs_qty)) * 100) if entry_price else 0.0,
+                        )
+                        db.add(trade_record)
+                        
+                        # Delete portfolio entry
+                        db.delete(portfolio_entry)
+                        
+                        # Update bot's in-memory position
+                        self.positions[instrument] = None
+                        
+                        # Update metrics
+                        self._update_metrics(db, realized_pl)
+                        
+                        db.commit()
+                        
+                        position_type = "SHORT" if is_short else "LONG"
+                        print(f"✅ Synced auto square-off: {instrument} {position_type} @ ₹{exit_price:.2f} (P&L: ₹{realized_pl:.2f})")
+                    else:
+                        print(f"⚠️  No closing order found for {instrument} – position may still be open")
+                
+                print("="*60)
+                print("✅ Auto square-off sync complete")
+                print("="*60 + "\n")
+                
+            finally:
+                db.close()
+                
+        except Exception as e:
+            print(f"❌ Error syncing auto square-offs: {e}")
+            import traceback
+            traceback.print_exc()
 
     # ── Core trading loop ──────────────────────────────────────────────
 
@@ -244,63 +493,104 @@ class UpstoxTradingBot:
     async def _execute_decision(
         self, instrument_token: str, ai_decision: Dict, analysis: Dict
     ):
-        """Execute trading decision for an Upstox instrument."""
+        """Execute trading decision for an Upstox instrument.
+        Supports both LONG and SHORT (intraday only) positions.
+        """
         action = ai_decision["decision"]
         confidence = ai_decision["confidence"]
         current_position = self.positions.get(instrument_token)
+        is_intraday = self.product_type == "I"
 
-        if action == "BUY" and current_position != "LONG":
-            # Risk check
-            risk_check = await self._check_risk_limits(
-                instrument_token, config.UPSTOX_TRADING_AMOUNT
-            )
-            if not risk_check["allowed"]:
-                print(f"🚫 Trade blocked by risk management: {risk_check['reason']}")
-                return
+        # Calculate trade amount adjusted by margin %
+        trade_amount = config.UPSTOX_TRADING_AMOUNT * (self.margin_percent / 100.0)
 
-            quantity = await self.upstox.get_quantity_from_quote(
-                instrument_token, config.UPSTOX_TRADING_AMOUNT
-            )
-            indicators_5m = analysis["indicators"]["5min"]
-            await self.execute_trade(
-                instrument_token,
-                "BUY",
-                quantity,
-                ai_decision["reasoning"],
-                confidence,
-                indicators_5m,
-            )
-            self.positions[instrument_token] = "LONG"
-
-        elif action == "SELL" and current_position == "LONG":
-            db = SessionLocal()
-            try:
-                portfolio_entry = (
-                    db.query(Portfolio)
-                    .filter(Portfolio.pair == instrument_token)
-                    .first()
-                )
-                if portfolio_entry:
-                    quantity = int(portfolio_entry.quantity)
-                    print(f"💼 Selling {quantity} {instrument_token} from portfolio")
-                else:
-                    print(
-                        f"⚠️ No portfolio entry for {instrument_token}, skipping SELL"
+        if action == "BUY":
+            # ── Close SHORT first if open ────────────────────────────
+            if current_position == "SHORT":
+                db = SessionLocal()
+                try:
+                    portfolio_entry = (
+                        db.query(Portfolio)
+                        .filter(Portfolio.pair == instrument_token)
+                        .first()
                     )
-                    return
-            finally:
-                db.close()
+                    if portfolio_entry:
+                        quantity = int(abs(portfolio_entry.quantity))
+                        print(f"📈 Closing SHORT: BUY {quantity} {instrument_token}")
+                        indicators_5m = analysis["indicators"]["5min"]
+                        await self.execute_trade(
+                            instrument_token, "BUY", quantity,
+                            f"[Close SHORT] {ai_decision['reasoning']}",
+                            confidence, indicators_5m,
+                        )
+                finally:
+                    db.close()
+                self.positions[instrument_token] = None
+                current_position = None
 
-            indicators_5m = analysis["indicators"]["5min"]
-            await self.execute_trade(
-                instrument_token,
-                "SELL",
-                quantity,
-                ai_decision["reasoning"],
-                confidence,
-                indicators_5m,
-            )
-            self.positions[instrument_token] = None
+            # ── Open LONG ────────────────────────────────────────────
+            if current_position != "LONG":
+                risk_check = await self._check_risk_limits(instrument_token, trade_amount)
+                if not risk_check["allowed"]:
+                    print(f"🚫 Trade blocked by risk management: {risk_check['reason']}")
+                    return
+
+                quantity = await self.upstox.get_quantity_from_quote(
+                    instrument_token, trade_amount
+                )
+                indicators_5m = analysis["indicators"]["5min"]
+                await self.execute_trade(
+                    instrument_token, "BUY", quantity,
+                    ai_decision["reasoning"], confidence, indicators_5m,
+                )
+                self.positions[instrument_token] = "LONG"
+
+        elif action == "SELL":
+            # ── Close LONG first if open ─────────────────────────────
+            if current_position == "LONG":
+                db = SessionLocal()
+                try:
+                    portfolio_entry = (
+                        db.query(Portfolio)
+                        .filter(Portfolio.pair == instrument_token)
+                        .first()
+                    )
+                    if portfolio_entry:
+                        quantity = int(portfolio_entry.quantity)
+                        print(f"📉 Closing LONG: SELL {quantity} {instrument_token}")
+                        indicators_5m = analysis["indicators"]["5min"]
+                        await self.execute_trade(
+                            instrument_token, "SELL", quantity,
+                            f"[Close LONG] {ai_decision['reasoning']}",
+                            confidence, indicators_5m,
+                        )
+                    else:
+                        print(f"⚠️ No portfolio entry for {instrument_token}, skipping close")
+                finally:
+                    db.close()
+                self.positions[instrument_token] = None
+                current_position = None
+
+            # ── Open SHORT (intraday only) ───────────────────────────
+            if is_intraday and current_position != "SHORT":
+                risk_check = await self._check_risk_limits(instrument_token, trade_amount)
+                if not risk_check["allowed"]:
+                    print(f"🚫 Short blocked by risk management: {risk_check['reason']}")
+                    return
+
+                quantity = await self.upstox.get_quantity_from_quote(
+                    instrument_token, trade_amount
+                )
+                print(f"📉 Opening SHORT: SELL {quantity} {instrument_token} (margin {self.margin_percent}%)")
+                indicators_5m = analysis["indicators"]["5min"]
+                await self.execute_trade(
+                    instrument_token, "SELL", quantity,
+                    f"[Short] {ai_decision['reasoning']}",
+                    confidence, indicators_5m,
+                )
+                self.positions[instrument_token] = "SHORT"
+            elif not is_intraday and current_position is None:
+                print(f"✋ SELL signal but product is Delivery – shorting not allowed")
 
         else:
             print(f"✋ Holding position (Current: {current_position})")
@@ -316,39 +606,49 @@ class UpstoxTradingBot:
         confidence: float = None,
         indicators: Dict = None,
     ):
-        """Execute an Upstox trade and log to database."""
+        """Execute an Upstox trade and log to database.
+
+        Position state is managed by _execute_decision; this method only
+        places the order and persists Trade / Portfolio / Metrics rows.
+        """
         try:
             order = await self.upstox.place_market_order(
                 instrument_token, side, quantity, product=self.product_type
             )
 
-            # get_current_price() returns 0.0 cleanly in sandbox (no exception raised)
             current_price = await self.upstox.get_current_price(instrument_token)
-
             executed_qty = int(order.get("quantity", quantity))
 
-            # Log to DB
+            is_opening_short = reasoning.startswith("[Short]")
+            is_closing_short = reasoning.startswith("[Close SHORT]")
+            is_closing_long = reasoning.startswith("[Close LONG]")
+
             db = SessionLocal()
             try:
+                is_sandbox = config.UPSTOX_SANDBOX
                 trade = Trade(
                     pair=instrument_token,
                     side=side,
                     quantity=executed_qty,
-                    entry_price=current_price if side == "BUY" else 0,
-                    exit_price=current_price if side == "SELL" else None,
-                    status="OPEN" if side == "BUY" else "CLOSED",
+                    entry_price=current_price if side == "BUY" and not is_closing_short else 0,
+                    exit_price=current_price if (side == "SELL" and not is_opening_short) else None,
+                    status="OPEN" if not (is_closing_short or is_closing_long) else "CLOSED",
                     order_id=str(order.get("orderId", "")),
                     ai_reasoning=reasoning,
                     confidence=confidence or 0.0,
+                    is_sandbox=is_sandbox,
                 )
                 db.add(trade)
                 db.commit()
 
-                if side == "BUY":
-                    self.positions[instrument_token] = "LONG"
+                # ── Opening a new LONG ─────────────────────────────────
+                if side == "BUY" and not is_closing_short:
                     portfolio_entry = (
                         db.query(Portfolio)
-                        .filter(Portfolio.pair == instrument_token)
+                        .filter(
+                            Portfolio.pair == instrument_token,
+                            Portfolio.is_sandbox == is_sandbox,
+                        )
                         .first()
                     )
                     if portfolio_entry:
@@ -376,56 +676,87 @@ class UpstoxTradingBot:
                             current_value=current_price * executed_qty,
                             unrealized_pl=0.0,
                             updated_at=datetime.now(timezone.utc),
+                            is_sandbox=is_sandbox,
                         )
                         db.add(portfolio_entry)
                     db.commit()
-                    print(f"💼 Portfolio updated: {instrument_token} position opened")
+                    print(f"💼 Portfolio updated: {instrument_token} LONG opened")
 
-                elif side == "SELL":
-                    self.positions[instrument_token] = None
+                # ── Opening a new SHORT (sell to open) ──────────────────
+                elif side == "SELL" and is_opening_short:
+                    portfolio_entry = Portfolio(
+                        pair=instrument_token,
+                        quantity=-executed_qty,  # negative = short
+                        entry_price=current_price,
+                        current_price=current_price,
+                        total_invested=current_price * executed_qty,
+                        current_value=current_price * executed_qty,
+                        unrealized_pl=0.0,
+                        updated_at=datetime.now(timezone.utc),
+                        is_sandbox=is_sandbox,
+                    )
+                    db.add(portfolio_entry)
+                    db.commit()
+                    print(f"💼 Portfolio updated: {instrument_token} SHORT opened @ ₹{current_price:.2f}")
+
+                # ── Closing a LONG (sell to close) ──────────────────────
+                elif side == "SELL" and not is_opening_short:
                     portfolio_entry = (
                         db.query(Portfolio)
-                        .filter(Portfolio.pair == instrument_token)
+                        .filter(
+                            Portfolio.pair == instrument_token,
+                            Portfolio.is_sandbox == is_sandbox
+                        )
                         .first()
                     )
                     realized_pl = 0.0
                     if portfolio_entry:
                         realized_pl = (
                             (current_price - portfolio_entry.entry_price)
-                            * portfolio_entry.quantity
+                            * abs(portfolio_entry.quantity)
                         )
                         trade.profit_loss = realized_pl
                         trade.profit_loss_percent = (
-                            (realized_pl / (portfolio_entry.entry_price * portfolio_entry.quantity))
+                            (realized_pl / (portfolio_entry.entry_price * abs(portfolio_entry.quantity)))
                             * 100
-                        )
+                        ) if portfolio_entry.entry_price else 0.0
                         trade.entry_price = portfolio_entry.entry_price
                         db.delete(portfolio_entry)
                         db.commit()
                         print(
-                            f"💼 Portfolio: {instrument_token} closed (P&L: ₹{realized_pl:.2f})"
+                            f"💼 Portfolio: {instrument_token} LONG closed (P&L: ₹{realized_pl:.2f})"
                         )
+                        self._update_metrics(db, realized_pl)
 
-                        metrics = self._get_or_create_metrics(db)
-                        metrics.total_trades += 1
-                        metrics.total_profit_loss += realized_pl
-                        if realized_pl > 0:
-                            metrics.winning_trades += 1
-                        elif realized_pl < 0:
-                            metrics.losing_trades += 1
-                        total_completed = metrics.winning_trades + metrics.losing_trades
-                        metrics.win_rate = (
-                            (metrics.winning_trades / total_completed * 100)
-                            if total_completed > 0
-                            else 0.0
+                # ── Closing a SHORT (buy to cover) ──────────────────────
+                elif side == "BUY" and is_closing_short:
+                    portfolio_entry = (
+                        db.query(Portfolio)
+                        .filter(
+                            Portfolio.pair == instrument_token,
+                            Portfolio.is_sandbox == is_sandbox,
                         )
-                        metrics.last_trade_time = datetime.now(timezone.utc)
-                        metrics.updated_at = datetime.now(timezone.utc)
+                        .first()
+                    )
+                    realized_pl = 0.0
+                    if portfolio_entry:
+                        # Short P&L = (entry - exit) * qty
+                        realized_pl = (
+                            (portfolio_entry.entry_price - current_price)
+                            * abs(portfolio_entry.quantity)
+                        )
+                        trade.profit_loss = realized_pl
+                        trade.profit_loss_percent = (
+                            (realized_pl / (portfolio_entry.entry_price * abs(portfolio_entry.quantity)))
+                            * 100
+                        ) if portfolio_entry.entry_price else 0.0
+                        trade.entry_price = portfolio_entry.entry_price
+                        db.delete(portfolio_entry)
                         db.commit()
                         print(
-                            f"📊 Metrics: Win Rate {metrics.win_rate:.1f}%, "
-                            f"Total P&L: ₹{metrics.total_profit_loss:.2f}"
+                            f"💼 Portfolio: {instrument_token} SHORT closed (P&L: ₹{realized_pl:.2f})"
                         )
+                        self._update_metrics(db, realized_pl)
 
                 self.trade_count += 1
                 self.daily_trades += 1
@@ -442,6 +773,29 @@ class UpstoxTradingBot:
         except Exception as e:
             print(f"❌ Upstox trade execution failed: {e}")
             raise
+
+    def _update_metrics(self, db, realized_pl: float):
+        """Update BotMetrics after closing a position."""
+        metrics = self._get_or_create_metrics(db)
+        metrics.total_trades += 1
+        metrics.total_profit_loss += realized_pl
+        if realized_pl > 0:
+            metrics.winning_trades += 1
+        elif realized_pl < 0:
+            metrics.losing_trades += 1
+        total_completed = metrics.winning_trades + metrics.losing_trades
+        metrics.win_rate = (
+            (metrics.winning_trades / total_completed * 100)
+            if total_completed > 0
+            else 0.0
+        )
+        metrics.last_trade_time = datetime.now(timezone.utc)
+        metrics.updated_at = datetime.now(timezone.utc)
+        db.commit()
+        print(
+            f"📊 Metrics: Win Rate {metrics.win_rate:.1f}%, "
+            f"Total P&L: ₹{metrics.total_profit_loss:.2f}"
+        )
 
     # ── Multi-timeframe analysis ───────────────────────────────────────
 
@@ -546,7 +900,8 @@ class UpstoxTradingBot:
                 available_balance = 0.0
             db = SessionLocal()
             try:
-                portfolio_entries = db.query(Portfolio).all()
+                is_sandbox = config.UPSTOX_SANDBOX
+                portfolio_entries = db.query(Portfolio).filter(Portfolio.is_sandbox == is_sandbox).all()
                 total_invested = 0.0
                 total_pnl = 0.0
                 positions_list = []
@@ -618,45 +973,49 @@ class UpstoxTradingBot:
     async def _check_risk_limits(
         self, instrument_token: str, trade_amount: float
     ) -> Dict:
-        """Check if trade passes risk management limits."""
+        """Check if trade passes risk management limits (Upstox INR-based)."""
         db = SessionLocal()
         try:
-            open_positions = db.query(Portfolio).count()
-            if open_positions >= config.MAX_OPEN_POSITIONS:
+            is_sandbox = config.UPSTOX_SANDBOX
+            open_positions = db.query(Portfolio).filter(Portfolio.is_sandbox == is_sandbox).count()
+            if open_positions >= config.UPSTOX_MAX_OPEN_POSITIONS:
                 return {
                     "allowed": False,
-                    "reason": f"Max open positions reached ({open_positions}/{config.MAX_OPEN_POSITIONS})",
+                    "reason": f"Max open positions reached ({open_positions}/{config.UPSTOX_MAX_OPEN_POSITIONS})",
                 }
 
             pair_position = (
-                db.query(Portfolio).filter(Portfolio.pair == instrument_token).first()
+                db.query(Portfolio).filter(
+                    Portfolio.pair == instrument_token,
+                    Portfolio.is_sandbox == is_sandbox
+                ).first()
             )
             if pair_position:
-                current_value = pair_position.quantity * pair_position.current_price
-                if current_value + trade_amount > config.MAX_POSITION_PER_PAIR:
+                current_value = abs(pair_position.quantity) * pair_position.current_price
+                if current_value + trade_amount > config.UPSTOX_MAX_POSITION_PER_PAIR:
                     return {
                         "allowed": False,
                         "reason": (
                             f"Max position per pair exceeded for {instrument_token} "
                             f"(₹{current_value:.2f} + ₹{trade_amount:.2f} > "
-                            f"₹{config.MAX_POSITION_PER_PAIR:.2f})"
+                            f"₹{config.UPSTOX_MAX_POSITION_PER_PAIR:.2f})"
                         ),
                     }
-            elif trade_amount > config.MAX_POSITION_PER_PAIR:
+            elif trade_amount > config.UPSTOX_MAX_POSITION_PER_PAIR:
                 return {
                     "allowed": False,
-                    "reason": f"Trade ₹{trade_amount:.2f} exceeds max ₹{config.MAX_POSITION_PER_PAIR:.2f}",
+                    "reason": f"Trade ₹{trade_amount:.2f} exceeds max ₹{config.UPSTOX_MAX_POSITION_PER_PAIR:.2f}",
                 }
 
-            all_positions = db.query(Portfolio).all()
-            total_exposure = sum(p.quantity * p.current_price for p in all_positions)
-            if total_exposure + trade_amount > config.MAX_PORTFOLIO_EXPOSURE:
+            all_positions = db.query(Portfolio).filter(Portfolio.is_sandbox == is_sandbox).all()
+            total_exposure = sum(abs(p.quantity) * p.current_price for p in all_positions)
+            if total_exposure + trade_amount > config.UPSTOX_MAX_PORTFOLIO_EXPOSURE:
                 return {
                     "allowed": False,
                     "reason": (
                         f"Portfolio exposure exceeded "
                         f"(₹{total_exposure:.2f} + ₹{trade_amount:.2f} > "
-                        f"₹{config.MAX_PORTFOLIO_EXPOSURE:.2f})"
+                        f"₹{config.UPSTOX_MAX_PORTFOLIO_EXPOSURE:.2f})"
                     ),
                 }
 

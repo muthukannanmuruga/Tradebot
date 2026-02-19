@@ -10,6 +10,7 @@ from app.binance_trading_bot import TradingBot
 from app.database import get_db, init_db
 from app.models import BotStatus, PortfolioResponse, MarketAnalysis, TradeCreate
 from app.config import config
+from typing import Literal
 
 # Conditional Upstox import
 if config.UPSTOX_ENABLED:
@@ -42,6 +43,29 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan
 )
+
+
+def _get_view_is_sandbox(market: str) -> bool:
+    """Return True if admin setting chooses 'sandbox' view for a market, otherwise False.
+
+    Falls back to config.BINANCE_TESTNET / config.UPSTOX_SANDBOX when no admin override exists.
+    """
+    db = next(get_db())
+    try:
+        from app.database import AdminSetting
+
+        key = f"view_{market}"
+        setting = db.query(AdminSetting).filter(AdminSetting.key == key).first()
+        if setting and setting.value:
+            return setting.value.lower() == "sandbox"
+        # fallback
+        if market == "binance":
+            return config.BINANCE_TESTNET
+        if market == "upstox":
+            return config.UPSTOX_SANDBOX
+        return False
+    finally:
+        db.close()
 
 # CORS middleware
 app.add_middleware(
@@ -158,7 +182,8 @@ async def get_trades(limit: int = 50):
     db = next(get_db())
     from app.database import Trade
     
-    trades = db.query(Trade).order_by(Trade.created_at.desc()).limit(limit).all()
+    is_sandbox = _get_view_is_sandbox("binance")
+    trades = db.query(Trade).filter(Trade.is_sandbox == is_sandbox).order_by(Trade.created_at.desc()).limit(limit).all()
     
     return {
         "trades": [
@@ -187,7 +212,11 @@ async def get_metrics():
     db = next(get_db())
     from app.database import BotMetrics
     
-    metrics = db.query(BotMetrics).first()
+    is_sandbox = _get_view_is_sandbox("binance")
+    metrics = db.query(BotMetrics).filter(
+        BotMetrics.market == "binance",
+        BotMetrics.is_sandbox == is_sandbox
+    ).first()
     
     if not metrics:
         return {
@@ -349,6 +378,41 @@ async def stop_upstox_bot():
     return {"status": "success", "message": "Upstox trading bot stopped"}
 
 
+@app.get("/upstox/metrics")
+async def get_upstox_metrics():
+    """Get Upstox bot performance metrics"""
+    db = next(get_db())
+    from app.database import BotMetrics
+
+    is_sandbox = _get_view_is_sandbox("upstox")
+    metrics = db.query(BotMetrics).filter(
+        BotMetrics.market == "upstox",
+        BotMetrics.is_sandbox == is_sandbox
+    ).first()
+
+    if not metrics:
+        return {
+            "total_trades": 0,
+            "winning_trades": 0,
+            "losing_trades": 0,
+            "total_profit_loss": 0.0,
+            "win_rate": 0.0,
+            "last_trade_time": None,
+            "updated_at": None,
+        }
+
+    return {
+        "total_trades": metrics.total_trades,
+        "winning_trades": metrics.winning_trades,
+        "losing_trades": metrics.losing_trades,
+        "total_profit_loss": metrics.total_profit_loss,
+        "win_rate": metrics.win_rate,
+        "last_trade_time": metrics.last_trade_time,
+        "updated_at": metrics.updated_at,
+        "average_pl_per_trade": metrics.total_profit_loss / metrics.total_trades if metrics.total_trades > 0 else 0.0,
+    }
+
+
 @app.get("/upstox/status")
 async def get_upstox_status():
     """Get Upstox bot status"""
@@ -441,7 +505,7 @@ async def get_upstox_orders():
     from app.upstox_client import UpstoxClient
     client = UpstoxClient()
     orders = await client.get_order_book()
-    mode = "sandbox" if config.UPSTOX_SANDBOX else "live"
+    mode = "sandbox" if _get_view_is_sandbox("upstox") else "live"
     return {"mode": mode, "count": len(orders), "orders": orders}
 
 
@@ -468,7 +532,7 @@ async def get_upstox_trades():
     from app.upstox_client import UpstoxClient
     client = UpstoxClient()
     trades = await client.get_trades()
-    mode = "sandbox" if config.UPSTOX_SANDBOX else "live"
+    mode = "sandbox" if _get_view_is_sandbox("upstox") else "live"
     return {"mode": mode, "count": len(trades), "trades": trades}
 
 
@@ -482,6 +546,46 @@ async def cancel_upstox_order(order_id: str):
     client = UpstoxClient()
     result = await client.cancel_order(order_id)
     return result
+
+@app.get("/admin/view-environment")
+async def admin_view_environment():
+    """Return current admin view override for markets (live vs sandbox)."""
+    db = next(get_db())
+    try:
+        from app.database import AdminSetting
+
+        def _read(key: str, default: str) -> str:
+            s = db.query(AdminSetting).filter(AdminSetting.key == key).first()
+            return s.value if s and s.value else default
+
+        binance_default = "sandbox" if config.BINANCE_TESTNET else "live"
+        upstox_default = "sandbox" if config.UPSTOX_SANDBOX else "live"
+
+        return {
+            "binance": _read("view_binance", binance_default),
+            "upstox": _read("view_upstox", upstox_default),
+        }
+    finally:
+        db.close()
+
+@app.post("/admin/toggle-view")
+async def admin_toggle_view(market: Literal["binance", "upstox"], view: Literal["sandbox", "live"]):
+    """Set admin view override for a market. Use `view=sandbox` or `view=live`."""
+    db = next(get_db())
+    try:
+        from app.database import AdminSetting
+
+        key = f"view_{market}"
+        existing = db.query(AdminSetting).filter(AdminSetting.key == key).first()
+        if existing:
+            existing.value = view
+        else:
+            setting = AdminSetting(key=key, value=view)
+            db.add(setting)
+        db.commit()
+        return {"market": market, "view": view, "status": "ok"}
+    finally:
+        db.close()
 
 
 @app.get("/upstox/auth-debug")
@@ -799,6 +903,26 @@ async def upstox_request_rotation():
         save_error = str(e)
 
     return {"result": result, "saved_to_env": saved, "access_token": access_token, "save_error": save_error}
+
+
+@app.get("/ai/crypto-sentiment")
+async def crypto_sentiment():
+    """AI analysis of crypto market sentiment, news & geopolitical events with trade suggestions."""
+    from app.deepseek_ai import DeepSeekAI
+
+    ai = DeepSeekAI()
+    result = await ai.get_market_sentiment(market="crypto")
+    return result
+
+
+@app.get("/ai/indian-market-sentiment")
+async def indian_market_sentiment():
+    """AI analysis of Indian stock market sentiment, news & geopolitical events with trade suggestions."""
+    from app.deepseek_ai import DeepSeekAI
+
+    ai = DeepSeekAI()
+    result = await ai.get_market_sentiment(market="indian_stocks")
+    return result
 
 
 @app.post("/upstox/webhook")

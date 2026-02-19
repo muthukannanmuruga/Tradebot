@@ -38,6 +38,7 @@ class Config:
 
     # Upstox Trading Pairs – comma-separated instrument tokens
     # Example: NSE_EQ|INE848E01016,NSE_EQ|INE002A01018  (PNB, RELIANCE)
+    UPSTOX_AUTO_SELECT_PAIRS: bool = os.getenv("UPSTOX_AUTO_SELECT_PAIRS", "False").lower() == "true"
     UPSTOX_TRADING_PAIRS_STR: str = os.getenv("UPSTOX_TRADING_PAIRS", "")
     UPSTOX_TRADING_PAIRS: list = (
         [p.strip() for p in UPSTOX_TRADING_PAIRS_STR.split(",") if p.strip()]
@@ -49,10 +50,21 @@ class Config:
     UPSTOX_TRADING_AMOUNT: float = float(os.getenv("UPSTOX_TRADING_AMOUNT", "1000"))
     # Product type: I = Intraday, D = Delivery, MTF = Margin
     UPSTOX_PRODUCT_TYPE: str = os.getenv("UPSTOX_PRODUCT_TYPE", "I")
+    # Margin utilization for intraday short/long (100 = use full permitted margin)
+    UPSTOX_MARGIN_PERCENT: float = float(os.getenv("UPSTOX_MARGIN_PERCENT", "100"))
+    UPSTOX_MOCK_BALANCE: float = float(os.getenv("UPSTOX_MOCK_BALANCE", "10000"))  # Mock balance for sandbox testing (INR)
+    
+    # Upstox Risk Management (in INR)
+    UPSTOX_MAX_POSITION_PER_PAIR: float = float(os.getenv("UPSTOX_MAX_POSITION_PER_PAIR", "5000"))
+    UPSTOX_MAX_OPEN_POSITIONS: int = int(os.getenv("UPSTOX_MAX_OPEN_POSITIONS", "3"))
+    UPSTOX_MAX_PORTFOLIO_EXPOSURE: float = float(os.getenv("UPSTOX_MAX_PORTFOLIO_EXPOSURE", "10000"))
 
     # Binance Settings
     BINANCE_ENABLED: bool = os.getenv("BINANCE_ENABLED", "True").lower() == "true"
     BINANCE_TESTNET: bool = os.getenv("BINANCE_TESTNET", "True").lower() == "true"
+    
+    # Auto-select pairs based on AI sentiment (True) or use manual pairs (False)
+    AUTO_SELECT_PAIRS: bool = os.getenv("AUTO_SELECT_PAIRS", "False").lower() == "true"
     
     # Trading Pairs - Support multiple pairs separated by comma
     TRADING_PAIRS_STR: str = os.getenv("TRADING_PAIRS", "BTCUSDT,ETHUSDT,SOLUSDT")

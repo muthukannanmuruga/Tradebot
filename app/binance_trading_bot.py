@@ -24,19 +24,66 @@ class TradingBot:
         self.trade_count = 0
         self.daily_trades = 0
         self.last_trade_date = None
-        # Multiple trading pairs from config
-        self.trading_pairs = config.TRADING_PAIRS
+        # Multiple trading pairs from config (or auto-selected)
+        self.auto_select_enabled = config.AUTO_SELECT_PAIRS
+        if self.auto_select_enabled:
+            print("🤖 AI Auto-pair selection ENABLED for Binance")
+            self.trading_pairs = self._get_ai_selected_pairs()
+        else:
+            self.trading_pairs = config.TRADING_PAIRS
         
         # Initialize positions for each pair and sync with database
         self._sync_positions_from_db()
+    
+    def _get_ai_selected_pairs(self) -> list:
+        """Get trading pairs from AI sentiment analysis."""
+        try:
+            import httpx
+            import asyncio
+            
+            async def fetch_sentiment():
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    response = await client.get("http://localhost:8000/ai/crypto-sentiment")
+                    return response.json()
+            
+            result = asyncio.run(fetch_sentiment())
+            suggested_trades = result.get("suggested_trades", [])
+            
+            if not suggested_trades:
+                print("⚠️  AI returned no trade suggestions, using config pairs")
+                return config.TRADING_PAIRS
+            
+            # Extract symbols and format as Binance pairs (add USDT if not present)
+            pairs = []
+            for trade in suggested_trades[:10]:  # Limit to top 10
+                symbol = trade.get("symbol", "").upper()
+                if symbol:
+                    if not symbol.endswith("USDT"):
+                        symbol = f"{symbol}USDT"
+                    pairs.append(symbol)
+            
+            if not pairs:
+                print("⚠️  Could not extract symbols from AI, using config pairs")
+                return config.TRADING_PAIRS
+            
+            print(f"🎯 AI selected {len(pairs)} pairs: {', '.join(pairs)}")
+            return pairs
+            
+        except Exception as e:
+            print(f"❌ Error fetching AI sentiment: {e}, using config pairs")
+            return config.TRADING_PAIRS
     
     def _sync_positions_from_db(self):
         """Sync position state from database on initialization"""
         db = SessionLocal()
         try:
+            is_sandbox = config.BINANCE_TESTNET
             for pair in self.trading_pairs:
                 # Check Portfolio table for open positions
-                portfolio_entry = db.query(Portfolio).filter(Portfolio.pair == pair).first()
+                portfolio_entry = db.query(Portfolio).filter(
+                    Portfolio.pair == pair,
+                    Portfolio.is_sandbox == is_sandbox
+                ).first()
                 
                 if portfolio_entry:
                     self.positions[pair] = "LONG"
@@ -50,10 +97,16 @@ class TradingBot:
             db.close()
     
     def _get_or_create_metrics(self, db):
-        """Get or create BotMetrics record"""
-        metrics = db.query(BotMetrics).first()
+        """Get or create BotMetrics record for Binance."""
+        is_sandbox = config.BINANCE_TESTNET
+        metrics = db.query(BotMetrics).filter(
+            BotMetrics.market == "binance",
+            BotMetrics.is_sandbox == is_sandbox
+        ).first()
         if not metrics:
             metrics = BotMetrics(
+                market="binance",
+                is_sandbox=is_sandbox,
                 total_trades=0,
                 winning_trades=0,
                 losing_trades=0,
@@ -63,7 +116,7 @@ class TradingBot:
             )
             db.add(metrics)
             db.commit()
-            print("📊 Initialized BotMetrics table")
+            print("📊 Initialized BotMetrics table (binance)")
         return metrics
     
     async def start(self):
@@ -262,6 +315,7 @@ class TradingBot:
             # Log trade to database
             db = SessionLocal()
             try:
+                is_sandbox = config.BINANCE_TESTNET
                 trade = Trade(
                     pair=symbol,
                     side=side,
@@ -271,7 +325,8 @@ class TradingBot:
                     status="OPEN" if side == "BUY" else "CLOSED",
                     order_id=str(order['orderId']),
                     ai_reasoning=reasoning,
-                    confidence=confidence or 0.0
+                    confidence=confidence or 0.0,
+                    is_sandbox=is_sandbox
                 )
                 db.add(trade)
                 db.commit()
@@ -280,7 +335,10 @@ class TradingBot:
                 if side == "BUY":
                     self.positions[symbol] = "LONG"
                     # Create or update portfolio entry
-                    portfolio_entry = db.query(Portfolio).filter(Portfolio.pair == symbol).first()
+                    portfolio_entry = db.query(Portfolio).filter(
+                        Portfolio.pair == symbol,
+                        Portfolio.is_sandbox == is_sandbox
+                    ).first()
                     if portfolio_entry:
                         # Update existing position (average price if adding to position)
                         old_value = portfolio_entry.quantity * portfolio_entry.entry_price
@@ -298,7 +356,8 @@ class TradingBot:
                             entry_price=current_price,
                             current_price=current_price,
                             unrealized_pl=0.0,
-                            updated_at=datetime.now(timezone.utc)
+                            updated_at=datetime.now(timezone.utc),
+                            is_sandbox=is_sandbox
                         )
                         db.add(portfolio_entry)
                     db.commit()
@@ -307,7 +366,10 @@ class TradingBot:
                 elif side == "SELL":
                     self.positions[symbol] = None
                     # Remove portfolio entry when position is closed
-                    portfolio_entry = db.query(Portfolio).filter(Portfolio.pair == symbol).first()
+                    portfolio_entry = db.query(Portfolio).filter(
+                        Portfolio.pair == symbol,
+                        Portfolio.is_sandbox == is_sandbox
+                    ).first()
                     realized_pl = 0.0
                     if portfolio_entry:
                         # Calculate realized P&L before removing
@@ -435,7 +497,8 @@ class TradingBot:
         """Get bot status"""
         db = SessionLocal()
         try:
-            total_trades = db.query(Trade).count()
+            is_sandbox = config.BINANCE_TESTNET
+            total_trades = db.query(Trade).filter(Trade.is_sandbox == is_sandbox).count()
             
             status = {
                 "is_running": self.is_running,
@@ -471,8 +534,9 @@ class TradingBot:
         """Check if trade passes risk management limits"""
         db = SessionLocal()
         try:
+            is_sandbox = config.BINANCE_TESTNET
             # 1. Check Max Open Positions
-            open_positions = db.query(Portfolio).count()
+            open_positions = db.query(Portfolio).filter(Portfolio.is_sandbox == is_sandbox).count()
             if open_positions >= config.MAX_OPEN_POSITIONS:
                 return {
                     "allowed": False,
@@ -480,7 +544,10 @@ class TradingBot:
                 }
             
             # 2. Check Max Position Per Pair
-            pair_position = db.query(Portfolio).filter(Portfolio.pair == trading_pair).first()
+            pair_position = db.query(Portfolio).filter(
+                Portfolio.pair == trading_pair,
+                Portfolio.is_sandbox == is_sandbox
+            ).first()
             if pair_position:
                 current_pair_value = pair_position.quantity * pair_position.current_price
                 if current_pair_value + trade_amount > config.MAX_POSITION_PER_PAIR:
@@ -495,7 +562,7 @@ class TradingBot:
                 }
             
             # 3. Check Max Portfolio Exposure
-            all_positions = db.query(Portfolio).all()
+            all_positions = db.query(Portfolio).filter(Portfolio.is_sandbox == is_sandbox).all()
             total_exposure = sum(p.quantity * p.current_price for p in all_positions)
             if total_exposure + trade_amount > config.MAX_PORTFOLIO_EXPOSURE:
                 return {

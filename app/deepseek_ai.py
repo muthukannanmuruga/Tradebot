@@ -75,11 +75,13 @@ class DeepSeekAI:
                 # Parse the AI response
                 ai_response = result['choices'][0]['message']['content']
                 decision = self._parse_decision(ai_response)
-                
+
                 return {
-                    "decision": decision["action"],
-                    "confidence": decision["confidence"],
-                    "reasoning": decision["reasoning"],
+                    "decision": decision.get("action"),
+                    "confidence": decision.get("confidence"),
+                    "reasoning": decision.get("reasoning"),
+                    "methodology": decision.get("methodology"),
+                    "recommended_timeframe": decision.get("recommended_timeframe"),
                     "raw_response": ai_response
                 }
         
@@ -112,7 +114,9 @@ JSON Response Format:
 {{
     "action": "BUY" or "SELL" or "HOLD",
     "confidence": 0.0 to 1.0,
-    "reasoning": "Your intelligent analysis"
+    "reasoning": "Your intelligent analysis",
+    "methodology": "SCALP" | "SWING" | "TREND" | "INTRADAY" | "OTHER",
+    "recommended_timeframe": "5m" | "15m" | "1h" | "4h" | "1d"
 }}
 
 💰 RISK MANAGEMENT CONSTRAINTS (MUST RESPECT):
@@ -152,7 +156,7 @@ Use your expertise to:
 ❌ Fighting higher timeframe trends
 ❌ Low confidence trades (use confidence scoring honestly)
 
-Your reasoning should reflect your analysis of the provided indicators and explain why you believe the action will maximize profit or protect capital. Be decisive but prudent.
+    Your reasoning should reflect your analysis of the provided indicators and explain why you believe the action will maximize profit or protect capital. Be decisive: when multiple indicators across timeframes align, favor taking action (BUY or SELL) rather than defaulting to HOLD. Avoid paralysis by analysis — do not overthink or miss high-probability opportunities.
 """
 
     def _load_md_instruction(self, path: str) -> Optional[str]:
@@ -304,7 +308,7 @@ Your reasoning should reflect your analysis of the provided indicators and expla
             "• Current position status and portfolio exposure",
             "",
             "Your goal: Maximize profit while protecting capital.",
-            "Be decisive when you see opportunity. Be cautious when unclear.",
+            "Be decisive when you see opportunity. If multiple indicators across timeframes align (strong setup), prefer action and assign a confidence >= 0.6. Avoid overthinking — do not default to HOLD when evidence supports a trade.",
             "Explain your reasoning with the data provided."
         ]
 
@@ -332,11 +336,17 @@ Your reasoning should reflect your analysis of the provided indicators and expla
             confidence = max(0.0, min(1.0, confidence))  # Clamp between 0 and 1
             
             reasoning = decision.get("reasoning", "No reasoning provided")
+            # optional fields
+            methodology = decision.get("methodology")
+            # accept either 'recommended_timeframe' or 'timeframe'
+            timeframe = decision.get("recommended_timeframe") or decision.get("timeframe")
             
             return {
                 "action": action,
                 "confidence": confidence,
-                "reasoning": reasoning
+                "reasoning": reasoning,
+                "methodology": methodology,
+                "recommended_timeframe": timeframe
             }
         
         except json.JSONDecodeError:
@@ -354,4 +364,133 @@ Your reasoning should reflect your analysis of the provided indicators and expla
                 "action": action,
                 "confidence": 0.5,
                 "reasoning": ai_response
+            }
+
+    # ────────────────────────────────────────────────────────────────────
+    # Market Sentiment / News Analysis
+    # ────────────────────────────────────────────────────────────────────
+
+    async def get_market_sentiment(self, market: str = "crypto") -> Dict:
+        """Ask DeepSeek to analyse recent market sentiment, news & geopolitical
+        events and return actionable trade ideas.
+
+        Args:
+            market: 'crypto' or 'indian_stocks'
+
+        Returns:
+            Dict with sentiment, analysis, and suggested tickers.
+        """
+        if market == "crypto":
+            system_prompt = (
+                "You are a world-class cryptocurrency market analyst. "
+                "Analyse the latest crypto news, macro events, regulatory developments, "
+                "on-chain metrics signals, and geopolitical factors that could move the "
+                "crypto market in the next 1-7 days. "
+                "Suggest up to 10 specific crypto tokens/coins that look attractive right now "
+                "along with a brief reason for each.\n\n"
+                "Return JSON:\n"
+                "{\n"
+                '  "overall_sentiment": "BULLISH" | "BEARISH" | "NEUTRAL",\n'
+                '  "confidence": 0.0-1.0,\n'
+                '  "analysis": "your detailed reasoning",\n'
+                '  "key_events": ["event1", "event2", ...],\n'
+                '  "suggested_trades": [\n'
+                '    {"symbol": "BTC", "direction": "LONG"|"SHORT", "reason": "..."},\n'
+                "    ...\n"
+                "  ]\n"
+                "}"
+            )
+            user_prompt = (
+                "Provide your latest sentiment analysis for the cryptocurrency market. "
+                "Cover Bitcoin, Ethereum, major altcoins and any trending tokens. "
+                "Include macro factors (Fed policy, DXY, US equities correlation) and "
+                "any upcoming events (ETF decisions, unlocks, halvings, upgrades). "
+                "Give me 5-10 actionable trade ideas with direction and reasoning."
+            )
+        else:
+            system_prompt = (
+                "You are a world-class Indian equity & derivatives market analyst. "
+                "Analyse the latest Indian stock market news, RBI policy outlook, "
+                "FII/DII flows, sector rotation, global cues, crude oil impact, INR trends, "
+                "and geopolitical developments (India-specific and global) that could move "
+                "NSE/BSE in the next 1-7 days. "
+                "Suggest up to 10 specific NSE-listed stocks or indices that look attractive "
+                "for intraday or short-term swing trades, along with a brief reason for each.\n\n"
+                "IMPORTANT: For each stock, provide the ISIN code (12-character alphanumeric, starts with INE).\n"
+                "Common examples: RELIANCE = INE002A01018, TCS = INE467B01029, INFY = INE009A01021, "
+                "HDFCBANK = INE040A01034, ICICIBANK = INE090A01021, SBIN = INE062A01020, ITC = INE154A01025\n\n"
+                "Return JSON:\n"
+                "{\n"
+                '  "overall_sentiment": "BULLISH" | "BEARISH" | "NEUTRAL",\n'
+                '  "confidence": 0.0-1.0,\n'
+                '  "analysis": "your detailed reasoning",\n'
+                '  "key_events": ["event1", "event2", ...],\n'
+                '  "suggested_trades": [\n'
+                '    {"symbol": "RELIANCE", "isin": "INE002A01018", "direction": "LONG"|"SHORT", "reason": "..."},\n'
+                "    ...\n"
+                "  ]\n"
+                "}"
+            )
+            user_prompt = (
+                "Provide your latest sentiment analysis for the Indian stock market (NSE/BSE). "
+                "Cover Nifty 50, Bank Nifty, and sector-specific trends. "
+                "Include macro factors (RBI rate decision, inflation, FII flows, crude oil, INR). "
+                "Mention any upcoming events (earnings, policy announcements, global cues). "
+                "Give me 5-10 actionable trade ideas for NSE stocks with ISIN codes, direction and reasoning."
+            )
+
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.post(
+                    f"{self.base_url}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": self.model,
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_prompt},
+                        ],
+                        "temperature": 0.4,
+                        "max_tokens": 1500,
+                    },
+                )
+                response.raise_for_status()
+                result = response.json()
+                raw = result["choices"][0]["message"]["content"]
+
+                # Try to parse as JSON
+                cleaned = raw.strip()
+                if cleaned.startswith("```json"):
+                    cleaned = cleaned.replace("```json", "").replace("```", "").strip()
+                elif cleaned.startswith("```"):
+                    cleaned = cleaned.replace("```", "").strip()
+
+                try:
+                    parsed = json.loads(cleaned)
+                except json.JSONDecodeError:
+                    parsed = {
+                        "overall_sentiment": "UNKNOWN",
+                        "confidence": 0.0,
+                        "analysis": raw,
+                        "key_events": [],
+                        "suggested_trades": [],
+                    }
+
+                parsed["market"] = market
+                parsed["raw_response"] = raw
+                return parsed
+
+        except Exception as e:
+            print(f"Error getting market sentiment ({market}): {e}")
+            return {
+                "market": market,
+                "overall_sentiment": "ERROR",
+                "confidence": 0.0,
+                "analysis": f"Failed to fetch sentiment: {str(e)}",
+                "key_events": [],
+                "suggested_trades": [],
+                "raw_response": "",
             }

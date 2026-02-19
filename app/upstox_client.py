@@ -205,12 +205,9 @@ class UpstoxClient:
     async def get_current_price(self, instrument_token: str) -> float:
         """
         Get last traded price for an instrument.
-        NOTE: LTP endpoint is NOT supported in sandbox – returns 10.0 immediately.
+        Uses LIVE API endpoint regardless of sandbox mode.
         instrument_token example: 'NSE_EQ|INE848E01016'
         """
-        if self.use_sandbox:
-            print(f"⚠️  Sandbox: LTP not supported for {instrument_token}, returning 10.0")
-            return 10.0
         try:
             encoded = quote(instrument_token, safe="")
             url = f"{self._v2_base}/market-quote/ltp?instrument_key={encoded}"
@@ -219,9 +216,13 @@ class UpstoxClient:
             quotes = data.get("data", {})
             for key, val in quotes.items():
                 return float(val.get("last_price", 0))
-            return 10.0
+            return 0.0
         except Exception as e:
             print(f"❌ Error fetching Upstox price for {instrument_token}: {e}")
+            # Return fallback price for sandbox
+            if self.use_sandbox:
+                print(f"⚠️  Using fallback price 10.0 for sandbox")
+                return 10.0
             raise
 
     async def get_historical_klines(
@@ -327,12 +328,16 @@ class UpstoxClient:
     async def get_account_balance(self, segment: str = "SEC") -> float:
         """
         Get available margin for trading.
-        NOTE: Funds endpoint is NOT supported in sandbox – returns 0.0.
+        In sandbox mode: returns mock balance (from UPSTOX_MOCK_BALANCE) for testing.
+        In live mode: fetches real balance from Upstox API.
         segment: 'SEC' for equity, 'COM' for commodity
         """
         if self.use_sandbox:
-            print("⚠️  Sandbox: Funds endpoint not supported, returning 0.0")
-            return 0.0
+            from app.config import config
+            mock_balance = config.UPSTOX_MOCK_BALANCE
+            print(f"💰 [Sandbox] Mock available margin: ₹{mock_balance:.2f}")
+            return mock_balance
+        
         try:
             url = f"{self._v2_base}/user/get-funds-and-margin"
             params = {"segment": segment} if segment else {}
@@ -351,7 +356,7 @@ class UpstoxClient:
     async def get_positions(self) -> List[Dict]:
         """Get current day positions. NOT supported in sandbox – returns []."""
         if self.use_sandbox:
-            print("⚠️  Sandbox: Positions endpoint not supported, returning []")
+            print("⚠️  [Sandbox] Positions endpoint not supported, returning []")
             return []
         try:
             url = f"{self._v2_base}/portfolio/short-term-positions"
@@ -364,7 +369,7 @@ class UpstoxClient:
     async def get_holdings(self) -> List[Dict]:
         """Get long-term holdings. NOT supported in sandbox – returns []."""
         if self.use_sandbox:
-            print("⚠️  Sandbox: Holdings endpoint not supported, returning []")
+            print("⚠️  [Sandbox] Holdings endpoint not supported, returning []")
             return []
         try:
             url = f"{self._v2_base}/portfolio/long-term-holdings"
