@@ -83,8 +83,9 @@ class Config:
     
     # Risk Management Parameters
     MAX_POSITION_PER_PAIR: float = float(os.getenv("MAX_POSITION_PER_PAIR", "20"))  # Max USDT per pair
-    MAX_OPEN_POSITIONS: int = int(os.getenv("MAX_OPEN_POSITIONS", "3"))  # Max concurrent open trades
     MAX_PORTFOLIO_EXPOSURE: float = float(os.getenv("MAX_PORTFOLIO_EXPOSURE", "50"))  # Max total USDT at risk
+    # Per-market risk limits
+    BINANCE_MAX_OPEN_POSITIONS: int = int(os.getenv("BINANCE_MAX_OPEN_POSITIONS", "3"))
 
     # Bot Settings
     # CHECK_INTERVAL_SECONDS: Check every 5 minutes to align with 5-minute candles
