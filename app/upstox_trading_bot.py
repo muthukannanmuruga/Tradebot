@@ -437,6 +437,7 @@ class UpstoxTradingBot:
                 intraday_signal=None,
                 portfolio_snapshot=portfolio_snapshot,
                 recent_trades=recent_trades,
+                market="upstox",
             )
 
             # Display
@@ -483,6 +484,15 @@ class UpstoxTradingBot:
                 else f"💭 Reasoning: {reasoning}"
             )
             print(f"{'='*60}\n")
+
+            # Confidence gate - skip low-confidence BUY/SELL signals
+            if ai_decision["decision"] in ("BUY", "SELL") and \
+               ai_decision.get("confidence", 0.0) < config.AI_CONFIDENCE_THRESHOLD:
+                print(
+                    f"⚠️ Skipping {ai_decision['decision']} – confidence "
+                    f"{ai_decision['confidence']:.2%} below threshold {config.AI_CONFIDENCE_THRESHOLD:.2%}"
+                )
+                return
 
             # Execute
             await self._execute_decision(instrument_token, ai_decision, mtf_analysis)

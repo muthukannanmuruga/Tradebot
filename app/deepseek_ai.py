@@ -11,9 +11,9 @@ class DeepSeekAI:
         self.api_key = config.DEEPSEEK_API_KEY
         self.base_url = "https://api.deepseek.com"
         self.model = "deepseek-chat"
-        # Optional instruction markdown
-        self.instruction_path = getattr(config, "DEEPSEEK_INSTRUCTION_PATH", "")
-        self.instruction_text = self._load_md_instruction(self.instruction_path) if self.instruction_path else None
+        # Instruction markdown – default to docs/deepseek_instruction.md if not overridden
+        self.instruction_path = getattr(config, "DEEPSEEK_INSTRUCTION_PATH", "") or "deepseek_instruction.md"
+        self.instruction_text = self._load_md_instruction(self.instruction_path)
     
     async def get_trading_decision(
         self,
@@ -22,7 +22,8 @@ class DeepSeekAI:
         current_position: Optional[str] = None,
         intraday_signal: Optional[Dict] = None,
         portfolio_snapshot: Optional[Dict] = None,
-        recent_trades: Optional[list] = None
+        recent_trades: Optional[list] = None,
+        market: str = "upstox",  # 'upstox' or 'binance'
     ) -> Dict:
         """
         Get trading decision from DeepSeek AI
@@ -41,7 +42,8 @@ class DeepSeekAI:
             current_position,
             intraday_signal=intraday_signal,
             portfolio_snapshot=portfolio_snapshot,
-            recent_trades=recent_trades
+            recent_trades=recent_trades,
+            market=market,
         )
         
         try:
@@ -57,7 +59,7 @@ class DeepSeekAI:
                         "messages": [
                             {
                                 "role": "system",
-                                "content": self.instruction_text or self._get_system_prompt()
+                                "content": self._build_system_prompt(market=market)
                             },
                             {
                                 "role": "user",
@@ -92,20 +94,51 @@ class DeepSeekAI:
                 "decision": "HOLD",
                 "confidence": 0.0,
                 "reasoning": f"Error occurred: {str(e)}",
+                "methodology": None,
+                "recommended_timeframe": None,
                 "raw_response": ""
             }
     
-    def _get_system_prompt(self) -> str:
+    def _get_system_prompt(self, market: str = "upstox") -> str:
         """Get the system prompt for the AI"""
-        # Calculate dynamic values from config
         sl_pct = config.STOP_LOSS_PERCENT
         tp_pct = config.TAKE_PROFIT_PERCENT
         rr_ratio = int(tp_pct / sl_pct) if sl_pct > 0 else 2
-        max_pos_per_pair = config.MAX_POSITION_PER_PAIR
-        max_open_pos = config.BINANCE_MAX_OPEN_POSITIONS
-        max_portfolio = config.MAX_PORTFOLIO_EXPOSURE
-        
-        return f"""You are an expert cryptocurrency scalping AI. Your PRIMARY GOAL is to MAXIMIZE PROFIT while PROTECTING CAPITAL at all costs.
+
+        if market == "upstox":
+            max_pos_per_pair = config.UPSTOX_MAX_POSITION_PER_PAIR
+            max_open_pos     = config.UPSTOX_MAX_OPEN_POSITIONS
+            max_portfolio    = config.UPSTOX_MAX_PORTFOLIO_EXPOSURE
+            currency         = "₹"
+            market_label     = "Indian stock (NSE/BSE) intraday scalping"
+            trade_amount     = config.UPSTOX_TRADING_AMOUNT
+            risk_block = (
+                f"💰 RISK MANAGEMENT CONSTRAINTS (MUST RESPECT):\n"
+                f"- Per Pair Limit: {currency}{max_pos_per_pair} INR maximum\n"
+                f"- Max Open Positions: {max_open_pos} concurrent trades\n"
+                f"- Total Portfolio Exposure: {currency}{max_portfolio} INR maximum\n"
+                f"- Trade Amount per signal: {currency}{trade_amount} INR\n"
+                f"- Stop Loss: {sl_pct}% from entry\n"
+                f"- Take Profit: {tp_pct}% from entry\n"
+                f"- Product: Intraday (positions auto-squared at 3:30 PM IST)\n"
+                f"- BUY = go LONG, SELL = go SHORT (intraday short allowed)"
+            )
+        else:
+            max_pos_per_pair = config.MAX_POSITION_PER_PAIR
+            max_open_pos     = config.BINANCE_MAX_OPEN_POSITIONS
+            max_portfolio    = config.MAX_PORTFOLIO_EXPOSURE
+            currency         = "$"
+            market_label     = "cryptocurrency scalping"
+            risk_block = (
+                f"💰 RISK MANAGEMENT CONSTRAINTS (MUST RESPECT):\n"
+                f"- Per Pair Limit: {currency}{max_pos_per_pair} USDT maximum\n"
+                f"- Max Open Positions: {max_open_pos} concurrent trades\n"
+                f"- Total Portfolio Exposure: {currency}{max_portfolio} USDT maximum\n"
+                f"- Stop Loss: {sl_pct}% from entry\n"
+                f"- Take Profit: {tp_pct}% from entry"
+            )
+
+        return f"""You are an expert {market_label} AI. Your PRIMARY GOAL is to MAXIMIZE PROFIT while PROTECTING CAPITAL at all costs.
 
 🎯 STRATEGY: Scalping (Quick entries and exits)
 ⚖️ RISK:REWARD: 1:{rr_ratio} ({sl_pct}% stop / {tp_pct}% profit target)
@@ -119,12 +152,7 @@ JSON Response Format:
     "recommended_timeframe": "5m" | "15m" | "1h" | "4h" | "1d"
 }}
 
-💰 RISK MANAGEMENT CONSTRAINTS (MUST RESPECT):
-- Per Pair Limit: ${max_pos_per_pair} USDT maximum
-- Max Open Positions: {max_open_pos} concurrent trades
-- Total Portfolio Exposure: ${max_portfolio} USDT maximum
-- Stop Loss: {sl_pct}% from entry
-- Take Profit: {tp_pct}% from entry
+{risk_block}
 
 🧠 YOUR INTELLIGENCE:
 You will receive multi-timeframe technical indicators (5m, 1h, 4h, 1d), portfolio data, and recent trades.
@@ -160,7 +188,7 @@ Use your expertise to:
 """
 
     def _load_md_instruction(self, path: str) -> Optional[str]:
-        """Load a markdown instruction file to use as the system prompt. Returns None if not found or empty."""
+        """Load a markdown instruction file. Returns None if not found or empty."""
         try:
             if not path:
                 return None
@@ -170,7 +198,28 @@ Use your expertise to:
         except Exception as e:
             print(f"Warning: could not load DeepSeek instruction file '{path}': {e}")
             return None
-    
+
+    def _build_system_prompt(self, market: str = "upstox") -> str:
+        """Compose the final system prompt: built-in prompt + appended MD instructions (if any).
+
+        The built-in prompt from ``_get_system_prompt()`` is always used as the base.
+        If ``docs/deepseek_instruction.md`` (or the path from DEEPSEEK_INSTRUCTION_PATH)
+        exists and contains content, it is appended after the base prompt so users can
+        add custom rules/context without losing the core trading logic.
+        """
+        base = self._get_system_prompt(market=market)
+        if self.instruction_text:
+            return (
+                base
+                + "\n\n"
+                + "─" * 70
+                + "\n📋 ADDITIONAL INSTRUCTIONS (from deepseek_instruction.md):\n"
+                + "─" * 70
+                + "\n"
+                + self.instruction_text
+            )
+        return base
+
     def _create_trading_prompt(
         self,
         symbol: str,
@@ -179,10 +228,14 @@ Use your expertise to:
         intraday_signal: Optional[Dict] = None,
         portfolio_snapshot: Optional[Dict] = None,
         recent_trades: Optional[list] = None,
+        market: str = "upstox",
     ) -> str:
         """Create enriched prompt with multi-timeframe market data."""
 
         position_text = f"Current Position: {current_position}" if current_position else "Current Position: NONE"
+
+        # Currency symbol for prompt
+        curr = "₹" if market == "upstox" else "$"
 
         # Check if this is multi-timeframe data
         is_multi_tf = "5min" in indicators and "1hour" in indicators
@@ -207,7 +260,7 @@ Use your expertise to:
                 f"- Higher TF MACD Bias: {'BULLISH' if alignment['higher_tf_macd_bullish'] else 'BEARISH' if alignment['higher_tf_macd_bearish'] else 'MIXED'}",
                 f"- Higher TF RSI Status: {'OVERBOUGHT' if alignment['higher_tf_rsi_overbought'] else 'OVERSOLD' if alignment['higher_tf_rsi_oversold'] else 'NEUTRAL'}",
                 f"- MACD Crossover on 4h/1d: {'YES' if alignment['has_higher_tf_macd_crossover'] else 'No'}",
-                f"- Current Price: ${indicators['summary']['current_price']:.2f}",
+                f"- Current Price: {curr}{indicators['summary']['current_price']:.2f}",
                 "="*70,
                 "",
             ]
@@ -221,8 +274,8 @@ Use your expertise to:
                     f"{'─'*70}",
                     "",
                     "TREND INDICATORS:",
-                    f"  • EMA 12: ${ind.get('ema_12', 0):.2f}",
-                    f"  • EMA 26: ${ind.get('ema_26', 0):.2f}",
+                    f"  • EMA 12: {curr}{ind.get('ema_12', 0):.2f}",
+                    f"  • EMA 26: {curr}{ind.get('ema_26', 0):.2f}",
                     f"  • EMA Trend: {ind.get('ema_trend')} ({'Price above EMA12' if ind.get('current_price', 0) > ind.get('ema_12', 0) else 'Price below EMA12'})",
                     "",
                     "MACD ANALYSIS:",
@@ -236,9 +289,9 @@ Use your expertise to:
                     f"  • RSI: {ind.get('rsi', 0):.2f} ({ind.get('rsi_zone')})",
                     "",
                     "VOLATILITY:",
-                    f"  • Bollinger Upper: ${ind.get('bb_upper', 0):.2f}",
-                    f"  • Bollinger Middle: ${ind.get('bb_middle', 0):.2f}",
-                    f"  • Bollinger Lower: ${ind.get('bb_lower', 0):.2f}",
+                    f"  • Bollinger Upper: {curr}{ind.get('bb_upper', 0):.2f}",
+                    f"  • Bollinger Middle: {curr}{ind.get('bb_middle', 0):.2f}",
+                    f"  • Bollinger Lower: {curr}{ind.get('bb_lower', 0):.2f}",
                     f"  • ATR: {ind.get('atr', 0):.4f}",
                     f"  • Volume: {ind.get('volume', 0):.2f}",
                     "",
@@ -247,11 +300,11 @@ Use your expertise to:
             # Single timeframe format (fallback)
             prompt_lines += [
                 "CURRENT MARKET DATA:",
-                f"- Price: ${indicators.get('current_price', 0):.2f}",
+                f"- Price: {curr}{indicators.get('current_price', 0):.2f}",
                 "",
                 "TREND INDICATORS:",
-                f"- EMA short: ${indicators.get('ema_12', 0):.2f}",
-                f"- EMA long: ${indicators.get('ema_26', 0):.2f}",
+                f"- EMA short: {curr}{indicators.get('ema_12', 0):.2f}",
+                f"- EMA long: {curr}{indicators.get('ema_26', 0):.2f}",
                 f"- EMA Trend: {indicators.get('ema_trend')}",
                 "",
                 "MACD ANALYSIS:",
@@ -278,9 +331,15 @@ Use your expertise to:
 
         # Add portfolio snapshot if provided
         if portfolio_snapshot:
+            if market == "upstox":
+                balance_label = "Available Balance (INR)"
+                balance_value = portfolio_snapshot.get('available_balance', 0)
+            else:
+                balance_label = "USDT Balance"
+                balance_value = portfolio_snapshot.get('usdt_balance', 0)
             prompt_lines += [
                 "PORTFOLIO SNAPSHOT:",
-                f"- USDT Balance: {portfolio_snapshot.get('usdt_balance', 0)}",
+                f"- {balance_label}: {balance_value}",
                 f"- Open Positions: {len(portfolio_snapshot.get('positions', []))}",
                 "",
             ]
@@ -363,14 +422,16 @@ Use your expertise to:
             return {
                 "action": action,
                 "confidence": 0.5,
-                "reasoning": ai_response
+                "reasoning": ai_response,
+                "methodology": None,
+                "recommended_timeframe": None
             }
 
     # ────────────────────────────────────────────────────────────────────
     # Market Sentiment / News Analysis
     # ────────────────────────────────────────────────────────────────────
 
-    async def get_market_sentiment(self, market: str = "crypto") -> Dict:
+    async def get_market_sentiment(self, market: str = "indian_stocks") -> Dict:
         """Ask DeepSeek to analyse recent market sentiment, news & geopolitical
         events and return actionable trade ideas.
 
