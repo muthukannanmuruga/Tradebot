@@ -146,8 +146,8 @@ class TradingBot:
             self._reset_daily_counter()
             
             # Check if we've exceeded daily trade limit
-            if self.daily_trades >= config.MAX_DAILY_TRADES:
-                print(f"⚠️ Daily trade limit reached ({config.MAX_DAILY_TRADES})")
+            if self.daily_trades >= config.BINANCE_MAX_DAILY_TRADES:
+                print(f"⚠️ Binance daily trade limit reached ({self.daily_trades}/{config.BINANCE_MAX_DAILY_TRADES})")
                 return
             
             # Process each trading pair
@@ -195,7 +195,8 @@ class TradingBot:
                 current_position,
                 intraday_signal=None,
                 portfolio_snapshot=portfolio_snapshot,
-                recent_trades=recent_trades
+                recent_trades=recent_trades,
+                market="binance",
             )
             
             # Display analysis
@@ -221,7 +222,16 @@ class TradingBot:
             print(f"🤖 AI Decision: {ai_decision['decision']} (Confidence: {ai_decision['confidence']:.2%})")
             print(f"💭 Reasoning: {ai_decision['reasoning'][:200]}..." if len(ai_decision['reasoning']) > 200 else f"💭 Reasoning: {ai_decision['reasoning']}")
             print(f"{'='*60}\n")
-            
+
+            # Confidence gate - skip low-confidence BUY/SELL signals
+            if ai_decision["decision"] in ("BUY", "SELL") and \
+               ai_decision.get("confidence", 0.0) < config.AI_CONFIDENCE_THRESHOLD:
+                print(
+                    f"⚠️ Skipping {ai_decision['decision']} – confidence "
+                    f"{ai_decision['confidence']:.2%} below threshold {config.AI_CONFIDENCE_THRESHOLD:.2%}"
+                )
+                return
+
             # Execute trade based on AI decision
             await self._execute_decision(trading_pair, ai_decision, mtf_analysis)
         
@@ -418,58 +428,6 @@ class TradingBot:
             print(f"❌ Trade execution failed: {e}")
             raise
 
-    async def _check_risk_limits(self, symbol: str, trade_amount: float) -> Dict:
-        """Check risk limits for Binance (USDT-based)."""
-        db = SessionLocal()
-        try:
-            is_sandbox = config.BINANCE_TESTNET
-            open_positions = db.query(Portfolio).filter(Portfolio.is_sandbox == is_sandbox).count()
-            if open_positions >= config.BINANCE_MAX_OPEN_POSITIONS:
-                return {
-                    "allowed": False,
-                    "reason": f"Max open positions reached ({open_positions}/{config.BINANCE_MAX_OPEN_POSITIONS})",
-                }
-
-            pair_position = (
-                db.query(Portfolio).filter(
-                    Portfolio.pair == symbol,
-                    Portfolio.is_sandbox == is_sandbox
-                ).first()
-            )
-            if pair_position:
-                current_value = abs(pair_position.quantity) * pair_position.current_price
-                if current_value + trade_amount > config.MAX_POSITION_PER_PAIR:
-                    return {
-                        "allowed": False,
-                        "reason": (
-                            f"Max position per pair exceeded for {symbol} "
-                            f"(${current_value:.2f} + ${trade_amount:.2f} > ${config.MAX_POSITION_PER_PAIR:.2f})"
-                        ),
-                    }
-            elif trade_amount > config.MAX_POSITION_PER_PAIR:
-                return {
-                    "allowed": False,
-                    "reason": f"Trade ${trade_amount:.2f} exceeds max ${config.MAX_POSITION_PER_PAIR:.2f}",
-                }
-
-            all_positions = db.query(Portfolio).filter(Portfolio.is_sandbox == is_sandbox).all()
-            total_exposure = sum(abs(p.quantity) * p.current_price for p in all_positions)
-            if total_exposure + trade_amount > config.MAX_PORTFOLIO_EXPOSURE:
-                return {
-                    "allowed": False,
-                    "reason": (
-                        f"Portfolio exposure exceeded (${total_exposure:.2f} + ${trade_amount:.2f} > ${config.MAX_PORTFOLIO_EXPOSURE:.2f})"
-                    ),
-                }
-
-            return {"allowed": True, "reason": "All risk checks passed"}
-
-        except Exception as e:
-            print(f"⚠️ Error checking Binance risk limits: {e}")
-            return {"allowed": True, "reason": "Risk check error – allowing trade"}
-        finally:
-            db.close()
-    
     async def get_multi_timeframe_analysis(self, symbol: str) -> Dict:
         """Get multi-timeframe market analysis for all timeframes"""
         try:
@@ -559,7 +517,7 @@ class TradingBot:
                 "positions": self.positions,  # Dict of all positions by pair
                 "trading_pairs": config.TRADING_PAIRS,
                 "daily_trades": self.daily_trades,
-                "max_daily_trades": config.MAX_DAILY_TRADES,
+                "max_daily_trades": config.BINANCE_MAX_DAILY_TRADES,
                 "risk_limits": {
                     "max_position_per_pair": config.MAX_POSITION_PER_PAIR,
                     "max_open_positions": config.BINANCE_MAX_OPEN_POSITIONS,
@@ -686,6 +644,7 @@ class TradingBot:
             return {
                 "total_balance": usdt_balance + total_invested + total_pnl,
                 "available_balance": usdt_balance,
+                "usdt_balance": usdt_balance,  # alias used by DeepSeek prompt
                 "total_invested": total_invested,
                 "open_positions": open_positions_count,
                 "total_profit_loss": total_pnl,

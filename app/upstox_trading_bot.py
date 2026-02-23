@@ -369,8 +369,8 @@ class UpstoxTradingBot:
         try:
             self._reset_daily_counter()
 
-            if self.daily_trades >= config.MAX_DAILY_TRADES:
-                print(f"⚠️ Daily trade limit reached ({config.MAX_DAILY_TRADES})")
+            if self.daily_trades >= config.UPSTOX_MAX_DAILY_TRADES:
+                print(f"⚠️ Upstox daily trade limit reached ({self.daily_trades}/{config.UPSTOX_MAX_DAILY_TRADES})")
                 return
 
             # NSE market hours: 9:15 AM – 3:30 PM IST (UTC+5:30)
@@ -892,7 +892,7 @@ class UpstoxTradingBot:
                 "positions": self.positions,
                 "trading_pairs": self.trading_pairs,
                 "daily_trades": self.daily_trades,
-                "max_daily_trades": config.MAX_DAILY_TRADES,
+                "max_daily_trades": config.UPSTOX_MAX_DAILY_TRADES,
                 "market": "upstox",
                 "product_type": self.product_type,
             }

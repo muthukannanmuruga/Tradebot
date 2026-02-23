@@ -11,7 +11,7 @@ class DeepSeekAI:
         self.api_key = config.DEEPSEEK_API_KEY
         self.base_url = "https://api.deepseek.com"
         self.model = "deepseek-chat"
-        # Instruction markdown – default to docs/deepseek_instruction.md if not overridden
+        # Instruction markdown – default to deepseek_instruction.md (project root) if not overridden
         self.instruction_path = getattr(config, "DEEPSEEK_INSTRUCTION_PATH", "") or "deepseek_instruction.md"
         self.instruction_text = self._load_md_instruction(self.instruction_path)
     

@@ -79,7 +79,12 @@ class Config:
     # Scalping strategy: 0.5% stop loss, 1% take profit (1:2 risk:reward)
     STOP_LOSS_PERCENT: float = float(os.getenv("STOP_LOSS_PERCENT", "0.5"))
     TAKE_PROFIT_PERCENT: float = float(os.getenv("TAKE_PROFIT_PERCENT", "1.0"))
+    # DEPRECATED: global daily trades limit kept only for backward compatibility.
+    # Prefer per-market limits below. The bots use per-market counters.
     MAX_DAILY_TRADES: int = int(os.getenv("MAX_DAILY_TRADES", "10"))
+    # Per-market daily trade limits (each bot has its own counter — set independently)
+    UPSTOX_MAX_DAILY_TRADES: int = int(os.getenv("UPSTOX_MAX_DAILY_TRADES", "10"))
+    BINANCE_MAX_DAILY_TRADES: int = int(os.getenv("BINANCE_MAX_DAILY_TRADES", "10"))
     
     # Risk Management Parameters
     MAX_POSITION_PER_PAIR: float = float(os.getenv("MAX_POSITION_PER_PAIR", "20"))  # Max USDT per pair
