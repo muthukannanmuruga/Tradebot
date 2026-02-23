@@ -306,6 +306,16 @@ class UpstoxTradingBot:
                                 break
                     
                     if closing_order and exit_price:
+                        closing_order_id = str(closing_order.get("order_id", ""))
+
+                        # Guard: skip if this order_id was already recorded (sync called twice)
+                        if closing_order_id and db.query(Trade).filter(Trade.order_id == closing_order_id).first():
+                            print(f"⚠️  order_id {closing_order_id} already in DB – skipping duplicate insert")
+                            db.delete(portfolio_entry)
+                            self.positions[instrument] = None
+                            db.commit()
+                            continue
+
                         # Found auto square-off – calculate P&L
                         entry_price = portfolio_entry.entry_price
                         
@@ -326,7 +336,7 @@ class UpstoxTradingBot:
                             status="CLOSED",
                             closed_at=datetime.now(timezone.utc),
                             is_sandbox=is_sandbox,
-                            order_id=str(closing_order.get("order_id", "")),
+                            order_id=closing_order_id,
                             ai_reasoning=f"[Auto Square-off] Market close at {exit_price:.2f}",
                             confidence=0.0,
                             profit_loss=realized_pl,
