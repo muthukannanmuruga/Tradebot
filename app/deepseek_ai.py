@@ -102,7 +102,7 @@ class DeepSeekAI:
         tp_pct = config.TAKE_PROFIT_PERCENT
         rr_ratio = int(tp_pct / sl_pct) if sl_pct > 0 else 2
         max_pos_per_pair = config.MAX_POSITION_PER_PAIR
-        max_open_pos = config.MAX_OPEN_POSITIONS
+        max_open_pos = config.BINANCE_MAX_OPEN_POSITIONS
         max_portfolio = config.MAX_PORTFOLIO_EXPOSURE
         
         return f"""You are an expert cryptocurrency scalping AI. Your PRIMARY GOAL is to MAXIMIZE PROFIT while PROTECTING CAPITAL at all costs.

@@ -589,10 +589,10 @@ class TradingBot:
             is_sandbox = config.BINANCE_TESTNET
             # 1. Check Max Open Positions
             open_positions = db.query(Portfolio).filter(Portfolio.is_sandbox == is_sandbox).count()
-            if open_positions >= config.MAX_OPEN_POSITIONS:
+            if open_positions >= config.BINANCE_MAX_OPEN_POSITIONS:
                 return {
                     "allowed": False,
-                    "reason": f"Max open positions reached ({open_positions}/{config.MAX_OPEN_POSITIONS})"
+                    "reason": f"Max open positions reached ({open_positions}/{config.BINANCE_MAX_OPEN_POSITIONS})"
                 }
             
             # 2. Check Max Position Per Pair

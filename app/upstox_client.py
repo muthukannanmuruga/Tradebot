@@ -22,7 +22,7 @@ class UpstoxClient:
     SANDBOX_URL = "https://api-sandbox.upstox.com/v3"
     SANDBOX_URL_V2 = "https://api-sandbox.upstox.com/v2"
 
-    # Interval mapping: Binance-style -> Upstox (unit, interval)
+    # Interval mapping: Binance-style -> Upstox (unit, interval) for historical endpoint
     INTERVAL_MAP = {
         "5m":  ("minutes", "5"),
         "15m": ("minutes", "15"),
@@ -33,6 +33,16 @@ class UpstoxClient:
         "1w":  ("weeks", "1"),
         "1M":  ("months", "1"),
     }
+
+    # Intraday endpoint uses different interval names (current day only)
+    INTRADAY_INTERVAL_MAP = {
+        "5m":  "5minute",
+        "15m": "15minute",
+        "30m": "30minute",
+    }
+
+    # Intervals that require intraday endpoint (historical endpoint returns empty for these)
+    INTRADAY_INTERVALS = {"5m", "15m", "30m"}
 
     def __init__(self):
         self.use_sandbox = getattr(config, "UPSTOX_SANDBOX", False)
@@ -251,17 +261,49 @@ class UpstoxClient:
             unit, interval_val = self.INTERVAL_MAP[interval]
             encoded_token = quote(instrument_token, safe="")
 
-            # Calculate date range based on limit and interval
-            to_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-            from_date = self._calculate_from_date(interval, limit)
+            # Minute intervals: use intraday endpoint during market hours,
+            # fall back to historical endpoint outside market hours
+            if interval in self.INTRADAY_INTERVALS:
+                now_ist = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+                market_open  = now_ist.replace(hour=9,  minute=15, second=0, microsecond=0)
+                market_close = now_ist.replace(hour=15, minute=30, second=0, microsecond=0)
+                is_market_open = market_open <= now_ist <= market_close
 
-            url = (
-                f"{self._v3_base}/historical-candle/"
-                f"{encoded_token}/{unit}/{interval_val}/{to_date}/{from_date}"
-            )
-
-            data = await self._get(url)
-            candles = data.get("data", {}).get("candles", [])
+                if is_market_open:
+                    # Use intraday endpoint for live today's candles
+                    intraday_interval = self.INTRADAY_INTERVAL_MAP[interval]
+                    url = (
+                        f"{self._v3_base}/historical-candle/intraday/"
+                        f"{encoded_token}/{intraday_interval}"
+                    )
+                    try:
+                        data = await self._get(url)
+                        candles = data.get("data", {}).get("candles", [])
+                    except Exception as intraday_err:
+                        print(f"⚠️ Intraday ({interval}) unavailable for {instrument_token}: {intraday_err}")
+                        return pd.DataFrame(
+                            columns=["timestamp", "open", "high", "low", "close", "volume"]
+                        )
+                else:
+                    # Outside market hours: use historical endpoint (returns previous session data)
+                    to_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                    from_date = self._calculate_from_date(interval, limit)
+                    url = (
+                        f"{self._v3_base}/historical-candle/"
+                        f"{encoded_token}/{unit}/{interval_val}/{to_date}/{from_date}"
+                    )
+                    data = await self._get(url)
+                    candles = data.get("data", {}).get("candles", [])
+            else:
+                # 1h, 4h, 1d etc — always use historical endpoint
+                to_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                from_date = self._calculate_from_date(interval, limit)
+                url = (
+                    f"{self._v3_base}/historical-candle/"
+                    f"{encoded_token}/{unit}/{interval_val}/{to_date}/{from_date}"
+                )
+                data = await self._get(url)
+                candles = data.get("data", {}).get("candles", [])
 
             if not candles:
                 print(f"⚠️ No candle data returned for {instrument_token} ({interval})")
