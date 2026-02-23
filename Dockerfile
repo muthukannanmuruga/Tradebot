@@ -1,6 +1,9 @@
 # Use official Python runtime as base image
 FROM python:3.11-slim
 
+# Disable Python stdout/stderr buffering so logs appear in real-time in Docker
+ENV PYTHONUNBUFFERED=1
+
 # Set working directory in container
 WORKDIR /app
 
