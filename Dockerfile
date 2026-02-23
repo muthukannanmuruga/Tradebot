@@ -18,6 +18,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
+# Explicitly ensure the DeepSeek supplemental instruction file is present
+COPY deepseek_instruction.md ./deepseek_instruction.md
+
 # Expose port for FastAPI
 EXPOSE 8000
 

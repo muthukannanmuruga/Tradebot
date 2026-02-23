@@ -174,15 +174,13 @@ class UpstoxTradingBot:
         print(f"📦 Product type: {self.product_type}")
         print(f"⏰ Check interval: {config.CHECK_INTERVAL_SECONDS}s")
         
-        # Start background sync task for auto square-offs (3:30 PM IST daily)
-        if self.product_type == "I":  # Only for intraday
-            # ── Catch-up: if server was down at 3:30 PM, sync immediately ──
-            now_ist = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
-            cutoff = now_ist.replace(hour=15, minute=30, second=0, microsecond=0)
-            # weekday() 0=Mon … 4=Fri; run only on trading days
-            if now_ist > cutoff and now_ist.weekday() < 5:
-                print("⚡ Server started after market close — running catch-up square-off sync...")
-                asyncio.create_task(self._sync_auto_squareoffs())
+        # Always run a startup sync regardless of product type.
+        # Uses get_positions() (intraday) + get_holdings() (delivery) as truth.
+        print("⚡ Running startup position sync (clearing any stale DB entries)...")
+        asyncio.create_task(self._sync_auto_squareoffs())
+
+        # Schedule daily 3:30 PM sync for intraday auto-squareoff cleanup
+        if self.product_type == "I":
             self._sync_task = asyncio.create_task(self._schedule_sync_task())
             print("📅 Auto square-off sync task scheduled for 3:30 PM IST")
 
@@ -241,134 +239,167 @@ class UpstoxTradingBot:
                 await asyncio.sleep(3600)  # Retry in 1 hour
 
     async def _sync_auto_squareoffs(self):
-        """Check order history and sync any auto-squared positions to DB."""
+        """Sync DB positions against Upstox live positions.
+
+        Uses ``get_positions()`` as the source of truth:
+        - If an instrument has net-zero quantity in Upstox it is flat (squared off).
+        - We also try to enrich with the closing order price from order-book/trades.
+        - Falls back to entry_price (₹0 P&L) if no closing order is findable
+          (e.g. cross-session restart where order history has already rolled off).
+        """
         try:
             print("\n" + "="*60)
-            print("🔄 Syncing auto square-offs from Upstox order history...")
+            print("🔄 Syncing positions: DB vs Upstox live positions...")
             print("="*60)
-            
+
             db = SessionLocal()
             try:
                 is_sandbox = config.UPSTOX_SANDBOX
-                # Get all open positions from DB
+
+                # ── 1. Get DB open positions ────────────────────────────
                 open_positions = db.query(Portfolio).filter(
                     Portfolio.is_sandbox == is_sandbox
                 ).all()
-                
+
                 if not open_positions:
                     print("✅ No open positions in DB – nothing to sync")
                     return
-                
-                # Get today's order history from Upstox
+
+                print(f"📋 Found {len(open_positions)} open position(s) in DB")
+
+                # ── 2. Get LIVE positions from Upstox ───────────────────
+                # Check both short-term (intraday) and long-term (delivery/holdings)
+                # so both product types are handled correctly.
+                # sandbox always returns [] so all sandbox DB entries will be cleaned.
+                try:
+                    intraday_positions = await self.upstox.get_positions()
+                except Exception as e:
+                    print(f"⚠️  Could not fetch intraday positions ({e}) – skipping sync to avoid false closes")
+                    return
+
+                try:
+                    delivery_holdings = await self.upstox.get_holdings()
+                except Exception as e:
+                    print(f"⚠️  Could not fetch delivery holdings ({e}) – will only check intraday positions")
+                    delivery_holdings = []
+
+                # Build set of instruments still open (non-zero qty) in either category
+                live_open = {
+                    pos["instrument_token"]
+                    for pos in intraday_positions
+                    if pos.get("quantity", 0) != 0
+                } | {
+                    h["instrument_token"]
+                    for h in delivery_holdings
+                    if h.get("quantity", 0) != 0
+                }
+                print(f"📡 Upstox live open: intraday={len(intraday_positions)} delivery={len(delivery_holdings)} → open instruments: {live_open or 'none'}")
+
+                # ── 3. Also fetch today's orders/trades for exit price ──
                 orders = await self.upstox.get_order_book()
                 trades = await self.upstox.get_trades()
-                
-                print(f"📋 Found {len(open_positions)} open positions in DB")
-                print(f"📋 Found {len(orders)} orders and {len(trades)} trades from Upstox")
-                
-                # For each open position, check if it was auto-squared
+
+                # ── 4. Process each DB position ─────────────────────────
                 for portfolio_entry in open_positions:
-                    instrument = portfolio_entry.pair
-                    db_qty = portfolio_entry.quantity
-                    is_short = db_qty < 0
-                    abs_qty = abs(db_qty)
-                    
-                    # Find matching closing order in order history
-                    # For LONG: look for SELL order
-                    # For SHORT: look for BUY order
+                    instrument  = portfolio_entry.pair
+                    db_qty      = portfolio_entry.quantity
+                    is_short    = db_qty < 0
+                    abs_qty     = abs(db_qty)
+                    entry_price = portfolio_entry.entry_price
                     expected_side = "BUY" if is_short else "SELL"
-                    
-                    closing_order = None
+                    position_type = "SHORT" if is_short else "LONG"
+
+                    # ── 4a. If position is still live in Upstox → skip ──
+                    if instrument in live_open:
+                        print(f"ℹ️  {instrument} still open in Upstox – leaving in DB")
+                        continue
+
+                    # ── 4b. Position is flat in Upstox → close in DB ────
+                    print(f"🔍 {instrument} {position_type} is flat in Upstox – closing in DB...")
+
+                    # Try to find closing order for P&L (same-day order history).
+                    closing_order_id = None
                     exit_price = None
-                    
-                    # Check trades first (most accurate)
+
                     for trade in trades:
                         if (
                             trade.get("instrument_token") == instrument
                             and trade.get("transaction_type") == expected_side
-                            and int(trade.get("quantity", 0)) == abs_qty
                         ):
-                            closing_order = trade
-                            exit_price = float(trade.get("price", 0))
+                            exit_price = float(trade.get("price", 0) or 0)
+                            closing_order_id = str(trade.get("order_id", ""))
                             break
-                    
-                    # Fallback to orders
-                    if not closing_order:
+
+                    if not exit_price:
                         for order in orders:
                             if (
                                 order.get("instrument_token") == instrument
                                 and order.get("transaction_type") == expected_side
                                 and order.get("status") == "complete"
-                                and int(order.get("quantity", 0)) == abs_qty
                             ):
-                                closing_order = order
-                                exit_price = float(order.get("average_price", 0))
+                                exit_price = float(order.get("average_price", 0) or 0)
+                                closing_order_id = str(order.get("order_id", ""))
                                 break
-                    
-                    if closing_order and exit_price:
-                        closing_order_id = str(closing_order.get("order_id", ""))
 
-                        # Guard: skip if this order_id was already recorded (sync called twice)
-                        if closing_order_id and db.query(Trade).filter(Trade.order_id == closing_order_id).first():
-                            print(f"⚠️  order_id {closing_order_id} already in DB – skipping duplicate insert")
-                            db.delete(portfolio_entry)
-                            self.positions[instrument] = None
-                            db.commit()
-                            continue
-
-                        # Found auto square-off – calculate P&L
-                        entry_price = portfolio_entry.entry_price
-                        
-                        if is_short:
-                            # SHORT P&L: (entry - exit) * qty
-                            realized_pl = (entry_price - exit_price) * abs_qty
-                        else:
-                            # LONG P&L: (exit - entry) * qty
-                            realized_pl = (exit_price - entry_price) * abs_qty
-                        
-                        # Create closed trade record
-                        trade_record = Trade(
-                            pair=instrument,
-                            side=expected_side,
-                            quantity=abs_qty,
-                            entry_price=entry_price,
-                            exit_price=exit_price,
-                            status="CLOSED",
-                            closed_at=datetime.now(timezone.utc),
-                            is_sandbox=is_sandbox,
-                            order_id=closing_order_id,
-                            ai_reasoning=f"[Auto Square-off] Market close at {exit_price:.2f}",
-                            confidence=0.0,
-                            profit_loss=realized_pl,
-                            profit_loss_percent=((realized_pl / (entry_price * abs_qty)) * 100) if entry_price else 0.0,
-                        )
-                        db.add(trade_record)
-                        
-                        # Delete portfolio entry
+                    # ── 4c. Duplicate guard: trade already recorded ──────
+                    if closing_order_id and db.query(Trade).filter(
+                        Trade.order_id == closing_order_id
+                    ).first():
+                        print(f"⚠️  order_id {closing_order_id} already in trades table – removing stale portfolio entry")
                         db.delete(portfolio_entry)
-                        
-                        # Update bot's in-memory position
                         self.positions[instrument] = None
-                        
-                        # Update metrics
-                        self._update_metrics(db, realized_pl)
-                        
                         db.commit()
-                        
-                        position_type = "SHORT" if is_short else "LONG"
-                        print(f"✅ Synced auto square-off: {instrument} {position_type} @ ₹{exit_price:.2f} (P&L: ₹{realized_pl:.2f})")
+                        continue
+
+                    # ── 4d. Calculate P&L ────────────────────────────────
+                    if not exit_price:
+                        # Cross-session: order history gone. Use entry_price → ₹0 P&L.
+                        exit_price = entry_price
+                        note = "[Stale Sync] Position flat in Upstox; no price data available"
+                        print(f"⚠️  No exit price found for {instrument} – recording ₹0 P&L stale close")
                     else:
-                        print(f"⚠️  No closing order found for {instrument} – position may still be open")
-                
+                        note = f"[Auto Square-off] Closed at ₹{exit_price:.2f}"
+
+                    if is_short:
+                        realized_pl = (entry_price - exit_price) * abs_qty
+                    else:
+                        realized_pl = (exit_price - entry_price) * abs_qty
+
+                    # ── 4e. Insert Trade record ──────────────────────────
+                    trade_record = Trade(
+                        pair=instrument,
+                        side=expected_side,
+                        quantity=abs_qty,
+                        entry_price=entry_price,
+                        exit_price=exit_price,
+                        status="CLOSED",
+                        closed_at=datetime.now(timezone.utc),
+                        is_sandbox=is_sandbox,
+                        order_id=closing_order_id or f"sync-{instrument}-{int(datetime.now().timestamp())}",
+                        ai_reasoning=note,
+                        confidence=0.0,
+                        profit_loss=realized_pl,
+                        profit_loss_percent=(
+                            (realized_pl / (entry_price * abs_qty)) * 100
+                        ) if entry_price else 0.0,
+                    )
+                    db.add(trade_record)
+                    db.delete(portfolio_entry)
+                    self.positions[instrument] = None
+                    self._update_metrics(db, realized_pl)
+                    db.commit()
+
+                    print(f"✅ Closed {instrument} {position_type} @ ₹{exit_price:.2f} | P&L: ₹{realized_pl:.2f}")
+
                 print("="*60)
-                print("✅ Auto square-off sync complete")
+                print("✅ Position sync complete")
                 print("="*60 + "\n")
-                
+
             finally:
                 db.close()
-                
+
         except Exception as e:
-            print(f"❌ Error syncing auto square-offs: {e}")
+            print(f"❌ Error syncing positions: {e}")
             import traceback
             traceback.print_exc()
 
@@ -422,7 +453,10 @@ class UpstoxTradingBot:
             try:
                 rows = (
                     db.query(Trade)
-                    .filter(Trade.pair == instrument_token)
+                    .filter(
+                        Trade.pair == instrument_token,
+                        Trade.is_sandbox == config.UPSTOX_SANDBOX,
+                    )
                     .order_by(Trade.created_at.desc())
                     .limit(3)
                     .all()
@@ -533,7 +567,10 @@ class UpstoxTradingBot:
                 try:
                     portfolio_entry = (
                         db.query(Portfolio)
-                        .filter(Portfolio.pair == instrument_token)
+                        .filter(
+                            Portfolio.pair == instrument_token,
+                            Portfolio.is_sandbox == config.UPSTOX_SANDBOX,
+                        )
                         .first()
                     )
                     if portfolio_entry:
@@ -574,7 +611,10 @@ class UpstoxTradingBot:
                 try:
                     portfolio_entry = (
                         db.query(Portfolio)
-                        .filter(Portfolio.pair == instrument_token)
+                        .filter(
+                            Portfolio.pair == instrument_token,
+                            Portfolio.is_sandbox == config.UPSTOX_SANDBOX,
+                        )
                         .first()
                     )
                     if portfolio_entry:
