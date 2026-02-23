@@ -34,14 +34,7 @@ class UpstoxClient:
         "1M":  ("months", "1"),
     }
 
-    # Intraday endpoint uses different interval names (current day only)
-    INTRADAY_INTERVAL_MAP = {
-        "5m":  "5minute",
-        "15m": "15minute",
-        "30m": "30minute",
-    }
-
-    # Intervals that require intraday endpoint (historical endpoint returns empty for these)
+    # Intervals that use intraday endpoint during market hours
     INTRADAY_INTERVALS = {"5m", "15m", "30m"}
 
     def __init__(self):
@@ -271,10 +264,10 @@ class UpstoxClient:
 
                 if is_market_open:
                     # Use intraday endpoint for live today's candles
-                    intraday_interval = self.INTRADAY_INTERVAL_MAP[interval]
+                    # Format: /historical-candle/intraday/{token}/{unit}/{interval_val}
                     url = (
                         f"{self._v3_base}/historical-candle/intraday/"
-                        f"{encoded_token}/{intraday_interval}"
+                        f"{encoded_token}/{unit}/{interval_val}"
                     )
                     try:
                         data = await self._get(url)
