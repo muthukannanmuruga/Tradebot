@@ -117,8 +117,9 @@ class Config:
     # API Server
     API_HOST: str = os.getenv("API_HOST", "0.0.0.0")
     API_PORT: int = int(os.getenv("API_PORT", "8000"))
-    # Path to a markdown instruction file for DeepSeek (optional)
-    DEEPSEEK_INSTRUCTION_PATH: str = os.getenv("DEEPSEEK_INSTRUCTION_PATH", "")
+    # Path to a markdown instruction file for DeepSeek (optional).
+    # Defaults to 'deepseek_instruction.md' in the project root when not set.
+    DEEPSEEK_INSTRUCTION_PATH: str = os.getenv("DEEPSEEK_INSTRUCTION_PATH", "deepseek_instruction.md")
 
     @classmethod
     def validate(cls) -> tuple[bool, list[str]]:
