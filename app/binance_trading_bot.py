@@ -414,7 +414,11 @@ class TradingBot:
                         print(f"📊 BotMetrics updated: Win Rate: {metrics.win_rate:.1f}%, Total P&L: ${metrics.total_profit_loss:.2f}")
                 
                 self.trade_count += 1
-                self.daily_trades += 1
+                # Only count opening trades toward daily limit (not closings)
+                # Opening = BUY (creates LONG position)
+                # Closing = SELL (closes LONG position)
+                if side == "BUY":
+                    self.daily_trades += 1
                 
                 print(f"✅ Trade executed: {side} {executed_qty} {symbol} @ ${current_price:.2f}")
                 print(f"📝 Order ID: {order['orderId']}")

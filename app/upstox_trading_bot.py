@@ -827,7 +827,13 @@ class UpstoxTradingBot:
                         self._update_metrics(db, realized_pl)
 
                 self.trade_count += 1
-                self.daily_trades += 1
+                # Only count opening trades toward daily limit (not closings)
+                # Opening = BUY new LONG or SELL new SHORT
+                # Closing = SELL existing LONG or BUY existing SHORT
+                is_opening = (side == "BUY" and not is_closing_short) or (side == "SELL" and is_opening_short)
+                if is_opening:
+                    self.daily_trades += 1
+                
                 print(
                     f"✅ Upstox trade: {side} {executed_qty} {instrument_token} @ ₹{current_price:.2f}"
                 )
