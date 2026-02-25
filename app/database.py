@@ -2,7 +2,7 @@
 Database models using SQLAlchemy for trade history and portfolio tracking.
 """
 
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Boolean, text
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Boolean, UniqueConstraint
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime, timezone
@@ -27,6 +27,7 @@ class Trade(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     pair = Column(String, index=True)
+    product_type = Column(String, default="I", index=True)  # I=Intraday, D=Delivery, MTF=Margin
     side = Column(String)  # BUY or SELL
     quantity = Column(Float)
     entry_price = Column(Float)
@@ -46,9 +47,15 @@ class Portfolio(Base):
     """Portfolio tracking model"""
 
     __tablename__ = "portfolio"
+    __table_args__ = (
+        # Unique constraint: one position per (pair, product_type, is_sandbox) combination
+        # Allows simultaneous intraday + delivery positions on same instrument
+        UniqueConstraint('pair', 'product_type', 'is_sandbox', name='uq_portfolio_position'),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
-    pair = Column(String, unique=True, index=True)
+    pair = Column(String, index=True)
+    product_type = Column(String, default="I", index=True)  # I=Intraday, D=Delivery, MTF=Margin
     quantity = Column(Float)
     entry_price = Column(Float)
     current_price = Column(Float)
@@ -60,12 +67,17 @@ class Portfolio(Base):
 
 
 class BotMetrics(Base):
-    """Bot performance metrics – one row per market (binance / upstox)"""
+    """Bot performance metrics – one row per (market, product_type, is_sandbox) combination"""
 
     __tablename__ = "bot_metrics"
+    __table_args__ = (
+        # Unique constraint: separate metrics per market, product type, and sandbox mode
+        UniqueConstraint('market', 'product_type', 'is_sandbox', name='uq_bot_metrics_combo'),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     market = Column(String, default="binance", index=True)  # 'binance' or 'upstox'
+    product_type = Column(String, default="I", index=True)  # I=Intraday, D=Delivery, MTF=Margin
     is_sandbox = Column(Boolean, default=False, index=True)  # True for testnet/sandbox, False for live
     total_trades = Column(Integer, default=0)
     winning_trades = Column(Integer, default=0)
@@ -94,46 +106,8 @@ def init_db():
     if not _tables_initialized:
         try:
             Base.metadata.create_all(bind=engine)
-            # Migrate: add new columns if they don't exist yet
-            with engine.connect() as conn:
-                for col, coltype in [
-                    ("total_invested", "FLOAT DEFAULT 0.0"),
-                    ("current_value",  "FLOAT DEFAULT 0.0"),
-                ]:
-                    try:
-                        conn.execute(
-                            text(f"ALTER TABLE portfolio ADD COLUMN IF NOT EXISTS {col} {coltype}")
-                        )
-                        conn.commit()
-                    except Exception:
-                        pass  # column already exists or DDL not supported
-                # BotMetrics: add 'market' column for per-market metrics
-                try:
-                    conn.execute(
-                        text("ALTER TABLE bot_metrics ADD COLUMN IF NOT EXISTS market VARCHAR DEFAULT 'binance'")
-                    )
-                    conn.commit()
-                except Exception:
-                    pass
-                # Add is_sandbox column to all tables
-                for table in ["trades", "portfolio", "bot_metrics"]:
-                    try:
-                        conn.execute(
-                            text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS is_sandbox BOOLEAN DEFAULT FALSE")
-                        )
-                        conn.commit()
-                    except Exception:
-                        pass
-
-                # Create admin_settings table if missing
-                try:
-                    conn.execute(
-                        text("CREATE TABLE IF NOT EXISTS admin_settings (id SERIAL PRIMARY KEY, key VARCHAR UNIQUE, value VARCHAR);")
-                    )
-                    conn.commit()
-                except Exception:
-                    pass
             _tables_initialized = True
+            print("✅ Database initialized")
         except Exception as e:
             print(f"Warning: Could not create tables: {e}")
 

@@ -26,7 +26,6 @@ async def lifespan(app: FastAPI):
     """Initialize and cleanup resources"""
     # Startup
     init_db()
-    print("✅ Database initialized")
     yield
     # Shutdown
     global trading_bot, upstox_bot
@@ -191,6 +190,7 @@ async def get_trades(limit: int = 50):
                 "id": trade.id,
                 "created_at": trade.created_at,
                 "pair": trade.pair,
+                "product_type": trade.product_type,
                 "side": trade.side,
                 "entry_price": trade.entry_price,
                 "exit_price": trade.exit_price,
@@ -208,36 +208,46 @@ async def get_trades(limit: int = 50):
 
 @app.get("/binance/metrics")
 async def get_metrics():
-    """Get Binance bot performance metrics"""
+    """Get Binance bot performance metrics (grouped by product_type)"""
     db = next(get_db())
     from app.database import BotMetrics
     
     is_sandbox = _get_view_is_sandbox("binance")
-    metrics = db.query(BotMetrics).filter(
+    all_metrics = db.query(BotMetrics).filter(
         BotMetrics.market == "binance",
         BotMetrics.is_sandbox == is_sandbox
-    ).first()
+    ).all()
     
-    if not metrics:
+    if not all_metrics:
         return {
-            "total_trades": 0,
-            "winning_trades": 0,
-            "losing_trades": 0,
+            "metrics_by_product_type": [],
             "total_profit_loss": 0.0,
-            "win_rate": 0.0,
-            "last_trade_time": None,
-            "updated_at": None
+            "total_trades": 0
         }
     
+    metrics_list = []
+    total_pl = 0.0
+    total_trades = 0
+    
+    for metrics in all_metrics:
+        metrics_list.append({
+            "product_type": metrics.product_type,
+            "total_trades": metrics.total_trades,
+            "winning_trades": metrics.winning_trades,
+            "losing_trades": metrics.losing_trades,
+            "total_profit_loss": metrics.total_profit_loss,
+            "win_rate": metrics.win_rate,
+            "last_trade_time": metrics.last_trade_time,
+            "updated_at": metrics.updated_at,
+            "average_pl_per_trade": metrics.total_profit_loss / metrics.total_trades if metrics.total_trades > 0 else 0.0
+        })
+        total_pl += metrics.total_profit_loss
+        total_trades += metrics.total_trades
+    
     return {
-        "total_trades": metrics.total_trades,
-        "winning_trades": metrics.winning_trades,
-        "losing_trades": metrics.losing_trades,
-        "total_profit_loss": metrics.total_profit_loss,
-        "win_rate": metrics.win_rate,
-        "last_trade_time": metrics.last_trade_time,
-        "updated_at": metrics.updated_at,
-        "average_pl_per_trade": metrics.total_profit_loss / metrics.total_trades if metrics.total_trades > 0 else 0.0
+        "metrics_by_product_type": metrics_list,
+        "total_profit_loss": total_pl,
+        "total_trades": total_trades
     }
 
 
@@ -380,36 +390,46 @@ async def stop_upstox_bot():
 
 @app.get("/upstox/metrics")
 async def get_upstox_metrics():
-    """Get Upstox bot performance metrics"""
+    """Get Upstox bot performance metrics (grouped by product_type)"""
     db = next(get_db())
     from app.database import BotMetrics
 
     is_sandbox = _get_view_is_sandbox("upstox")
-    metrics = db.query(BotMetrics).filter(
+    all_metrics = db.query(BotMetrics).filter(
         BotMetrics.market == "upstox",
         BotMetrics.is_sandbox == is_sandbox
-    ).first()
+    ).all()
 
-    if not metrics:
+    if not all_metrics:
         return {
-            "total_trades": 0,
-            "winning_trades": 0,
-            "losing_trades": 0,
+            "metrics_by_product_type": [],
             "total_profit_loss": 0.0,
-            "win_rate": 0.0,
-            "last_trade_time": None,
-            "updated_at": None,
+            "total_trades": 0
         }
 
+    metrics_list = []
+    total_pl = 0.0
+    total_trades = 0
+    
+    for metrics in all_metrics:
+        metrics_list.append({
+            "product_type": metrics.product_type,
+            "total_trades": metrics.total_trades,
+            "winning_trades": metrics.winning_trades,
+            "losing_trades": metrics.losing_trades,
+            "total_profit_loss": metrics.total_profit_loss,
+            "win_rate": metrics.win_rate,
+            "last_trade_time": metrics.last_trade_time,
+            "updated_at": metrics.updated_at,
+            "average_pl_per_trade": metrics.total_profit_loss / metrics.total_trades if metrics.total_trades > 0 else 0.0,
+        })
+        total_pl += metrics.total_profit_loss
+        total_trades += metrics.total_trades
+    
     return {
-        "total_trades": metrics.total_trades,
-        "winning_trades": metrics.winning_trades,
-        "losing_trades": metrics.losing_trades,
-        "total_profit_loss": metrics.total_profit_loss,
-        "win_rate": metrics.win_rate,
-        "last_trade_time": metrics.last_trade_time,
-        "updated_at": metrics.updated_at,
-        "average_pl_per_trade": metrics.total_profit_loss / metrics.total_trades if metrics.total_trades > 0 else 0.0,
+        "metrics_by_product_type": metrics_list,
+        "total_profit_loss": total_pl,
+        "total_trades": total_trades
     }
 
 

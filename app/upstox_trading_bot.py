@@ -97,6 +97,7 @@ class UpstoxTradingBot:
                 portfolio_entry = (
                     db.query(Portfolio).filter(
                         Portfolio.pair == pair,
+                        Portfolio.product_type == self.product_type,
                         Portfolio.is_sandbox == is_sandbox
                     ).first()
                 )
@@ -124,11 +125,13 @@ class UpstoxTradingBot:
         is_sandbox = config.UPSTOX_SANDBOX
         metrics = db.query(BotMetrics).filter(
             BotMetrics.market == "upstox",
+            BotMetrics.product_type == self.product_type,
             BotMetrics.is_sandbox == is_sandbox
         ).first()
         if not metrics:
             metrics = BotMetrics(
                 market="upstox",
+                product_type=self.product_type,
                 is_sandbox=is_sandbox,
                 total_trades=0,
                 winning_trades=0,
@@ -139,7 +142,7 @@ class UpstoxTradingBot:
             )
             db.add(metrics)
             db.commit()
-            print("📊 Initialized BotMetrics table (upstox)")
+            print(f"📊 Initialized BotMetrics table (upstox, {self.product_type})")
         return metrics
 
     # ── Bot lifecycle ──────────────────────────────────────────────────
@@ -368,6 +371,7 @@ class UpstoxTradingBot:
                     # ── 4e. Insert Trade record ──────────────────────────
                     trade_record = Trade(
                         pair=instrument,
+                        product_type=portfolio_entry.product_type,  # Preserve product type from portfolio
                         side=expected_side,
                         quantity=abs_qty,
                         entry_price=entry_price,
@@ -690,6 +694,7 @@ class UpstoxTradingBot:
                 is_sandbox = config.UPSTOX_SANDBOX
                 trade = Trade(
                     pair=instrument_token,
+                    product_type=self.product_type,
                     side=side,
                     quantity=executed_qty,
                     entry_price=current_price if side == "BUY" and not is_closing_short else 0,
@@ -709,6 +714,7 @@ class UpstoxTradingBot:
                         db.query(Portfolio)
                         .filter(
                             Portfolio.pair == instrument_token,
+                            Portfolio.product_type == self.product_type,
                             Portfolio.is_sandbox == is_sandbox,
                         )
                         .first()
@@ -731,6 +737,7 @@ class UpstoxTradingBot:
                     else:
                         portfolio_entry = Portfolio(
                             pair=instrument_token,
+                            product_type=self.product_type,
                             quantity=executed_qty,
                             entry_price=current_price,
                             current_price=current_price,
@@ -748,6 +755,7 @@ class UpstoxTradingBot:
                 elif side == "SELL" and is_opening_short:
                     portfolio_entry = Portfolio(
                         pair=instrument_token,
+                        product_type=self.product_type,
                         quantity=-executed_qty,  # negative = short
                         entry_price=current_price,
                         current_price=current_price,
@@ -767,6 +775,7 @@ class UpstoxTradingBot:
                         db.query(Portfolio)
                         .filter(
                             Portfolio.pair == instrument_token,
+                            Portfolio.product_type == self.product_type,
                             Portfolio.is_sandbox == is_sandbox
                         )
                         .first()
@@ -799,6 +808,7 @@ class UpstoxTradingBot:
                         db.query(Portfolio)
                         .filter(
                             Portfolio.pair == instrument_token,
+                            Portfolio.product_type == self.product_type,
                             Portfolio.is_sandbox == is_sandbox,
                         )
                         .first()
@@ -1000,6 +1010,7 @@ class UpstoxTradingBot:
                         positions_list.append(
                             {
                                 "pair": entry.pair,
+                                "product_type": entry.product_type,
                                 "quantity": entry.quantity,
                                 "entry_price": entry.entry_price,
                                 "current_price": entry.current_price,

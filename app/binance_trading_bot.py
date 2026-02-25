@@ -101,11 +101,13 @@ class TradingBot:
         is_sandbox = config.BINANCE_TESTNET
         metrics = db.query(BotMetrics).filter(
             BotMetrics.market == "binance",
+            BotMetrics.product_type == "I",  # Crypto is always intraday-style
             BotMetrics.is_sandbox == is_sandbox
         ).first()
         if not metrics:
             metrics = BotMetrics(
                 market="binance",
+                product_type="I",
                 is_sandbox=is_sandbox,
                 total_trades=0,
                 winning_trades=0,
@@ -116,7 +118,7 @@ class TradingBot:
             )
             db.add(metrics)
             db.commit()
-            print("📊 Initialized BotMetrics table (binance)")
+            print("📊 Initialized BotMetrics table (binance, intraday)")
         return metrics
     
     async def start(self):
@@ -328,6 +330,7 @@ class TradingBot:
                 is_sandbox = config.BINANCE_TESTNET
                 trade = Trade(
                     pair=symbol,
+                    product_type="I",  # Crypto is always intraday-style (no delivery)
                     side=side,
                     quantity=executed_qty,
                     entry_price=current_price if side == "BUY" else 0,
