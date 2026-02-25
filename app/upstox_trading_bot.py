@@ -261,6 +261,7 @@ class UpstoxTradingBot:
 
                 # ── 1. Get DB open positions ────────────────────────────
                 open_positions = db.query(Portfolio).filter(
+                    Portfolio.product_type == self.product_type,
                     Portfolio.is_sandbox == is_sandbox
                 ).all()
 
@@ -346,7 +347,8 @@ class UpstoxTradingBot:
 
                     # ── 4c. Duplicate guard: trade already recorded ──────
                     if closing_order_id and db.query(Trade).filter(
-                        Trade.order_id == closing_order_id
+                        Trade.order_id == closing_order_id,
+                        Trade.is_sandbox == is_sandbox
                     ).first():
                         print(f"⚠️  order_id {closing_order_id} already in trades table – removing stale portfolio entry")
                         db.delete(portfolio_entry)
@@ -459,6 +461,7 @@ class UpstoxTradingBot:
                     db.query(Trade)
                     .filter(
                         Trade.pair == instrument_token,
+                        Trade.product_type == self.product_type,
                         Trade.is_sandbox == config.UPSTOX_SANDBOX,
                     )
                     .order_by(Trade.created_at.desc())
@@ -573,6 +576,7 @@ class UpstoxTradingBot:
                         db.query(Portfolio)
                         .filter(
                             Portfolio.pair == instrument_token,
+                            Portfolio.product_type == self.product_type,
                             Portfolio.is_sandbox == config.UPSTOX_SANDBOX,
                         )
                         .first()
@@ -617,6 +621,7 @@ class UpstoxTradingBot:
                         db.query(Portfolio)
                         .filter(
                             Portfolio.pair == instrument_token,
+                            Portfolio.product_type == self.product_type,
                             Portfolio.is_sandbox == config.UPSTOX_SANDBOX,
                         )
                         .first()
@@ -950,7 +955,11 @@ class UpstoxTradingBot:
         """Get Upstox bot status."""
         db = SessionLocal()
         try:
-            total_trades = db.query(Trade).count()
+            is_sandbox = config.UPSTOX_SANDBOX
+            total_trades = db.query(Trade).filter(
+                Trade.product_type == self.product_type,
+                Trade.is_sandbox == is_sandbox
+            ).count()
             status = {
                 "is_running": self.is_running,
                 "last_check": self.last_check,
@@ -985,7 +994,10 @@ class UpstoxTradingBot:
             db = SessionLocal()
             try:
                 is_sandbox = config.UPSTOX_SANDBOX
-                portfolio_entries = db.query(Portfolio).filter(Portfolio.is_sandbox == is_sandbox).all()
+                portfolio_entries = db.query(Portfolio).filter(
+                    Portfolio.product_type == self.product_type,
+                    Portfolio.is_sandbox == is_sandbox
+                ).all()
                 total_invested = 0.0
                 total_pnl = 0.0
                 positions_list = []
@@ -1025,7 +1037,11 @@ class UpstoxTradingBot:
                 db.commit()
 
                 completed_trades = (
-                    db.query(Trade).filter(Trade.side == "SELL").all()
+                    db.query(Trade).filter(
+                        Trade.side == "SELL",
+                        Trade.product_type == self.product_type,
+                        Trade.is_sandbox == is_sandbox
+                    ).all()
                 )
                 winning = sum(
                     1 for t in completed_trades if (getattr(t, "profit_loss", None) or 0) > 0
@@ -1062,7 +1078,10 @@ class UpstoxTradingBot:
         db = SessionLocal()
         try:
             is_sandbox = config.UPSTOX_SANDBOX
-            open_positions = db.query(Portfolio).filter(Portfolio.is_sandbox == is_sandbox).count()
+            open_positions = db.query(Portfolio).filter(
+                Portfolio.product_type == self.product_type,
+                Portfolio.is_sandbox == is_sandbox
+            ).count()
             if open_positions >= config.UPSTOX_MAX_OPEN_POSITIONS:
                 return {
                     "allowed": False,
@@ -1072,6 +1091,7 @@ class UpstoxTradingBot:
             pair_position = (
                 db.query(Portfolio).filter(
                     Portfolio.pair == instrument_token,
+                    Portfolio.product_type == self.product_type,
                     Portfolio.is_sandbox == is_sandbox
                 ).first()
             )
@@ -1092,7 +1112,10 @@ class UpstoxTradingBot:
                     "reason": f"Trade ₹{trade_amount:.2f} exceeds max ₹{config.UPSTOX_MAX_POSITION_PER_PAIR:.2f}",
                 }
 
-            all_positions = db.query(Portfolio).filter(Portfolio.is_sandbox == is_sandbox).all()
+            all_positions = db.query(Portfolio).filter(
+                Portfolio.product_type == self.product_type,
+                Portfolio.is_sandbox == is_sandbox
+            ).all()
             total_exposure = sum(abs(p.quantity) * p.current_price for p in all_positions)
             if total_exposure + trade_amount > config.UPSTOX_MAX_PORTFOLIO_EXPOSURE:
                 return {

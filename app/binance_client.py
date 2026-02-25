@@ -10,7 +10,19 @@ from app.config import config
 import time
 
 class BinanceClient:
-    """Wrapper for Binance API operations"""
+    """
+    Wrapper for Binance API operations.
+    
+    Trading Mode: SPOT (Regular Trading)
+    - Uses /api/v3/order endpoints via client.create_order()
+    - Requires full capital (no leverage)
+    - Positions can be held indefinitely
+    
+    Not Implemented: MARGIN Trading
+    - Would require client.create_margin_order() or create_isolated_margin_order()
+    - Supports leverage (borrow funds to amplify position)
+    - Higher risk/reward profile
+    """
     def __init__(self):
         if config.BINANCE_TESTNET:
             api_key = config.BINANCE_TESTNET_API_KEY

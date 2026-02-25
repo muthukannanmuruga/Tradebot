@@ -63,6 +63,12 @@ class Config:
     BINANCE_ENABLED: bool = os.getenv("BINANCE_ENABLED", "True").lower() == "true"
     BINANCE_TESTNET: bool = os.getenv("BINANCE_TESTNET", "True").lower() == "true"
     
+    # Binance Product Type: SPOT (regular trading) or MARGIN (leveraged trading)
+    # Current implementation: SPOT only (uses /api/v3/order endpoints)
+    # Future: Add MARGIN support using create_margin_order() endpoints
+    # Database values: "SPOT" (current), "MARGIN" (future)
+    BINANCE_PRODUCT_TYPE: str = os.getenv("BINANCE_PRODUCT_TYPE", "SPOT")
+    
     # Auto-select pairs based on AI sentiment (True) or use manual pairs (False)
     AUTO_SELECT_PAIRS: bool = os.getenv("AUTO_SELECT_PAIRS", "False").lower() == "true"
     

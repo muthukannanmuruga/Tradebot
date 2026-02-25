@@ -7,6 +7,27 @@ The Portfolio, Trade, and BotMetrics tables now support tracking multiple produc
 - View historical trades filtered by product type
 - Compare performance analytics (P&L, win rate, etc.) separately for intraday vs delivery strategies
 
+## Product Type Meanings
+
+### Upstox (Indian Stocks)
+- **`I` = Intraday (MIS)** - Positions auto-squareoff at 3:30 PM, supports shorting
+- **`D` = Delivery (CNC)** - Positions held overnight, requires full capital
+- **`MTF` = Margin Trading** - Leveraged delivery positions
+
+### Binance (Crypto)
+- **`SPOT` = Regular Trading** - Buy/sell with full capital, no leverage
+  - Positions can be held indefinitely (no auto-squareoff)
+  - Uses `/api/v3/order` endpoints
+  - No liquidation risk
+- **`MARGIN` = Leveraged Trading** _(Not Yet Implemented)_
+  - Would use `/sapi/v1/margin/order` endpoints
+  - Supports leverage (3x-10x depending on pair)
+  - Higher risk with liquidation potential
+
+**Key Difference**: Binance uses explicit trading mode names (SPOT/MARGIN) while Upstox uses position type codes (I/D/MTF).
+
+For detailed Binance SPOT vs MARGIN documentation, see [BINANCE_SPOT_TRADING.md](BINANCE_SPOT_TRADING.md).
+
 ## What Changed
 
 ### Database Schema

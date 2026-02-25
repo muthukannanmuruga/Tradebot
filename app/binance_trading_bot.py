@@ -82,6 +82,7 @@ class TradingBot:
                 # Check Portfolio table for open positions
                 portfolio_entry = db.query(Portfolio).filter(
                     Portfolio.pair == pair,
+                    Portfolio.product_type == "SPOT",
                     Portfolio.is_sandbox == is_sandbox
                 ).first()
                 
@@ -101,13 +102,13 @@ class TradingBot:
         is_sandbox = config.BINANCE_TESTNET
         metrics = db.query(BotMetrics).filter(
             BotMetrics.market == "binance",
-            BotMetrics.product_type == "I",  # Crypto is always intraday-style
+            BotMetrics.product_type == "SPOT",
             BotMetrics.is_sandbox == is_sandbox
         ).first()
         if not metrics:
             metrics = BotMetrics(
                 market="binance",
-                product_type="I",
+                product_type="SPOT",
                 is_sandbox=is_sandbox,
                 total_trades=0,
                 winning_trades=0,
@@ -118,7 +119,7 @@ class TradingBot:
             )
             db.add(metrics)
             db.commit()
-            print("📊 Initialized BotMetrics table (binance, intraday)")
+            print("📊 Initialized BotMetrics table (binance, SPOT)")
         return metrics
     
     async def start(self):
@@ -179,7 +180,12 @@ class TradingBot:
             recent_trades = []
             db = SessionLocal()
             try:
-                rows = db.query(Trade).filter(Trade.pair == trading_pair).order_by(Trade.created_at.desc()).limit(3).all()
+                is_sandbox = config.BINANCE_TESTNET
+                rows = db.query(Trade).filter(
+                    Trade.pair == trading_pair,
+                    Trade.product_type == "SPOT",
+                    Trade.is_sandbox == is_sandbox
+                ).order_by(Trade.created_at.desc()).limit(3).all()
                 for r in rows:
                     recent_trades.append(f"{r.side} {r.quantity} {r.pair} @ {getattr(r, 'entry_price', getattr(r, 'price', 'N/A'))} on {r.created_at}")
             except Exception:
@@ -276,7 +282,12 @@ class TradingBot:
             # Get actual quantity from portfolio
             db = SessionLocal()
             try:
-                portfolio_entry = db.query(Portfolio).filter(Portfolio.pair == trading_pair).first()
+                is_sandbox = config.BINANCE_TESTNET
+                portfolio_entry = db.query(Portfolio).filter(
+                    Portfolio.pair == trading_pair,
+                    Portfolio.product_type == "SPOT",
+                    Portfolio.is_sandbox == is_sandbox
+                ).first()
                 if portfolio_entry:
                     quantity = float(portfolio_entry.quantity)
                     print(f"💼 Selling {quantity} {trading_pair} from portfolio")
@@ -330,7 +341,7 @@ class TradingBot:
                 is_sandbox = config.BINANCE_TESTNET
                 trade = Trade(
                     pair=symbol,
-                    product_type="I",  # Crypto is always intraday-style (no delivery)
+                    product_type="SPOT",
                     side=side,
                     quantity=executed_qty,
                     entry_price=current_price if side == "BUY" else 0,
@@ -350,6 +361,7 @@ class TradingBot:
                     # Create or update portfolio entry
                     portfolio_entry = db.query(Portfolio).filter(
                         Portfolio.pair == symbol,
+                        Portfolio.product_type == "SPOT",
                         Portfolio.is_sandbox == is_sandbox
                     ).first()
                     if portfolio_entry:
@@ -365,6 +377,7 @@ class TradingBot:
                         # Create new position
                         portfolio_entry = Portfolio(
                             pair=symbol,
+                            product_type="SPOT",
                             quantity=executed_qty,
                             entry_price=current_price,
                             current_price=current_price,
@@ -381,6 +394,7 @@ class TradingBot:
                     # Remove portfolio entry when position is closed
                     portfolio_entry = db.query(Portfolio).filter(
                         Portfolio.pair == symbol,
+                        Portfolio.product_type == "SPOT",
                         Portfolio.is_sandbox == is_sandbox
                     ).first()
                     realized_pl = 0.0
@@ -515,7 +529,10 @@ class TradingBot:
         db = SessionLocal()
         try:
             is_sandbox = config.BINANCE_TESTNET
-            total_trades = db.query(Trade).filter(Trade.is_sandbox == is_sandbox).count()
+            total_trades = db.query(Trade).filter(
+                Trade.product_type == "SPOT",
+                Trade.is_sandbox == is_sandbox
+            ).count()
             
             status = {
                 "is_running": self.is_running,
@@ -553,7 +570,10 @@ class TradingBot:
         try:
             is_sandbox = config.BINANCE_TESTNET
             # 1. Check Max Open Positions
-            open_positions = db.query(Portfolio).filter(Portfolio.is_sandbox == is_sandbox).count()
+            open_positions = db.query(Portfolio).filter(
+                Portfolio.product_type == "SPOT",
+                Portfolio.is_sandbox == is_sandbox
+            ).count()
             if open_positions >= config.BINANCE_MAX_OPEN_POSITIONS:
                 return {
                     "allowed": False,
@@ -563,6 +583,7 @@ class TradingBot:
             # 2. Check Max Position Per Pair
             pair_position = db.query(Portfolio).filter(
                 Portfolio.pair == trading_pair,
+                Portfolio.product_type == "SPOT",
                 Portfolio.is_sandbox == is_sandbox
             ).first()
             if pair_position:
@@ -579,7 +600,10 @@ class TradingBot:
                 }
             
             # 3. Check Max Portfolio Exposure
-            all_positions = db.query(Portfolio).filter(Portfolio.is_sandbox == is_sandbox).all()
+            all_positions = db.query(Portfolio).filter(
+                Portfolio.product_type == "SPOT",
+                Portfolio.is_sandbox == is_sandbox
+            ).all()
             total_exposure = sum(p.quantity * p.current_price for p in all_positions)
             if total_exposure + trade_amount > config.MAX_PORTFOLIO_EXPOSURE:
                 return {
@@ -604,7 +628,12 @@ class TradingBot:
             # Get portfolio entries and update current prices
             db = SessionLocal()
             try:
-                portfolio_entries = db.query(Portfolio).all()
+                is_sandbox = config.BINANCE_TESTNET
+                # Only get Binance positions (crypto pairs without '|' separator)
+                portfolio_entries = db.query(Portfolio).filter(
+                    Portfolio.product_type == "SPOT",
+                    Portfolio.is_sandbox == is_sandbox
+                ).all()
                 
                 total_invested = 0.0
                 total_pnl = 0.0
@@ -638,7 +667,11 @@ class TradingBot:
                 db.commit()
                 
                 # Calculate win rate from completed trades
-                completed_trades = db.query(Trade).filter(Trade.side == "SELL").all()
+                completed_trades = db.query(Trade).filter(
+                    Trade.side == "SELL",
+                    Trade.product_type == "SPOT",
+                    Trade.is_sandbox == is_sandbox
+                ).all()
                 winning_trades = sum(1 for t in completed_trades if (getattr(t, 'profit_loss', None) or 0) > 0)
                 win_rate = (winning_trades / len(completed_trades) * 100) if completed_trades else 0.0
                 

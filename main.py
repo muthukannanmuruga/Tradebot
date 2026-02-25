@@ -182,7 +182,10 @@ async def get_trades(limit: int = 50):
     from app.database import Trade
     
     is_sandbox = _get_view_is_sandbox("binance")
-    trades = db.query(Trade).filter(Trade.is_sandbox == is_sandbox).order_by(Trade.created_at.desc()).limit(limit).all()
+    trades = db.query(Trade).filter(
+        Trade.product_type == "SPOT",
+        Trade.is_sandbox == is_sandbox
+    ).order_by(Trade.created_at.desc()).limit(limit).all()
     
     return {
         "trades": [
